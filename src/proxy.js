@@ -300,6 +300,25 @@ export function createApp(config) {
     const clientHeaders = buildBackendAuthHeaders(OPENCODE_SERVER_PASSWORD);
     const client = createOpencodeClient({ baseUrl: OPENCODE_SERVER_URL, headers: clientHeaders });
 
+    const MODEL_CACHE_MS = Number.isFinite(Number(config.MODEL_CACHE_MS)) && Number(config.MODEL_CACHE_MS) > 0
+        ? Number(config.MODEL_CACHE_MS)
+        : 60 * 1000;
+    let cachedProvidersList = null;
+    let cachedModelsList = null;
+    let cachedModelsAt = 0;
+
+    const createRequestLogger = (req, res) => {
+        const requestId = req.headers['x-request-id'] || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        if (!res.headersSent) {
+            res.setHeader('x-request-id', requestId);
+        }
+        const startedAt = Date.now();
+        const log = (event, data = {}) => {
+            logDebug(event, { requestId, elapsedMs: Date.now() - startedAt, ...data });
+        };
+        return { requestId, startedAt, log };
+    };
+
     // Auth middleware
     app.use((req, res, next) => {
         if (
@@ -318,12 +337,20 @@ export function createApp(config) {
         next();
     });
 
-    const getProvidersList = async () => {
+    const getProvidersList = async (forceRefresh = false) => {
+        const now = Date.now();
+        if (!forceRefresh && cachedProvidersList && cachedModelsAt && now - cachedModelsAt < MODEL_CACHE_MS) {
+            return cachedProvidersList;
+        }
         const providersRes = await client.config.providers();
         const providersRaw = providersRes.data?.providers || [];
-        return Array.isArray(providersRaw)
+        const providersList = Array.isArray(providersRaw)
             ? providersRaw
             : Object.entries(providersRaw).map(([id, info]) => ({ ...info, id }));
+        cachedProvidersList = providersList;
+        cachedModelsList = null;
+        cachedModelsAt = now;
+        return providersList;
     };
 
     const buildModelsList = (providersList) => {
@@ -346,6 +373,17 @@ export function createApp(config) {
         return models;
     };
 
+    const getModelsList = async (forceRefresh = false) => {
+        const now = Date.now();
+        if (!forceRefresh && cachedModelsList && cachedModelsAt && now - cachedModelsAt < MODEL_CACHE_MS) {
+            return cachedModelsList;
+        }
+        const models = buildModelsList(await getProvidersList(forceRefresh));
+        cachedModelsList = models;
+        cachedModelsAt = now;
+        return models;
+    };
+
     const normalizeModelID = (modelID) => {
         if (!modelID || typeof modelID !== 'string') return modelID;
         return modelID
@@ -354,8 +392,7 @@ export function createApp(config) {
     };
 
     const resolveRequestedModel = async (requestedModel) => {
-        const providersList = await getProvidersList();
-        const models = buildModelsList(providersList);
+        const models = await getModelsList();
         const fallbackModel = models[0]?.id || 'opencode/kimi-k2.5-free';
         let [providerID, modelID] = (requestedModel || fallbackModel).split('/');
         if (!modelID) {
@@ -392,7 +429,7 @@ export function createApp(config) {
     // Models endpoint
     app.get('/v1/models', async (req, res) => {
         try {
-            const models = buildModelsList(await getProvidersList());
+            const models = await getModelsList();
             res.json({ object: 'list', data: models });
         } catch (error) {
             console.error('[Proxy] Model Fetch Error:', error.message);
@@ -771,6 +808,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 let id = `chatcmpl-${Date.now()}`;
                 let insideReasoning = false;
                 let keepaliveInterval = null;
+                const { requestId, log } = createRequestLogger(req, res);
 
                 try {
                     const { messages, model, stream: requestStream, temperature, max_tokens, top_p, frequency_penalty, presence_penalty, stop, reasoning_effort, reasoning } = req.body;
@@ -794,13 +832,13 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         reasoning_effort: reasoningLevel
                     };
 
-                    logDebug('Request params', { temperature: requestParams.temperature, max_tokens: requestParams.max_tokens, top_p: requestParams.top_p, reasoning_effort: reasoningLevel });
+                    log('Request params', { temperature: requestParams.temperature, max_tokens: requestParams.max_tokens, top_p: requestParams.top_p, reasoning_effort: reasoningLevel });
 
                     const resolvedModel = await resolveRequestedModel(model);
                     pID = resolvedModel.providerID;
                     mID = resolvedModel.modelID;
                     if (resolvedModel.aliasFrom) {
-                        logDebug('Resolved model alias', { from: resolvedModel.aliasFrom, to: resolvedModel.resolved });
+                        log('Resolved model alias', { from: resolvedModel.aliasFrom, to: resolvedModel.resolved });
                     }
 
                     const normalizeMessageContent = (content) => {
@@ -892,7 +930,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     if (!parts.length) {
                         return res.status(400).json({ error: { message: 'messages must include at least one non-system text message' } });
                     }
-                    logDebug('Request start', {
+                    log('Request start', {
                         model: `${pID}/${mID}`,
                         stream: Boolean(stream),
                         userMessages: messages.length,
@@ -920,7 +958,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     const sessionRes = await client.session.create();
                     sessionId = sessionRes.data?.id;
                     if (!sessionId) throw new Error('Failed to create OpenCode session');
-                    logDebug('Session created', { sessionId });
+                    log('Session created', { sessionId });
 
                     id = `chatcmpl-${Date.now()}`;
                     insideReasoning = false;
@@ -1194,9 +1232,8 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         res.write('data: [DONE]\n\n');
                         res.end();
                     } else {
-                        const promptStart = Date.now();
                         await promptWithTimeout(promptParams, REQUEST_TIMEOUT_MS);
-                        logDebug('Prompt sent', { sessionId, ms: Date.now() - promptStart });
+                        log('Prompt sent', { sessionId, phase: 'non-stream' });
                         const { content, reasoning, error } = await pollForAssistantResponse(sessionId, REQUEST_TIMEOUT_MS);
                         if (error && !content && !reasoning) {
                             return res.status(502).json({
@@ -1238,10 +1275,18 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                 }
                             }
                         });
+                        log('Request complete', {
+                            sessionId,
+                            phase: 'non-stream',
+                            promptTokens,
+                            completionTokens: completionTokensCalc + reasoningTokensCalc,
+                            totalTokens
+                        });
                     }
                 } catch (error) {
                     console.error('[Proxy] API Error:', error.message);
                     console.error('[Proxy] Error details:', error);
+                    log('Request failed', { sessionId, stream, error: error.message, errorType: error.code || error.constructor?.name || 'Error' });
 
                     if (stream && typeof insideReasoning !== 'undefined' && insideReasoning) {
                         res.write(`data: ${JSON.stringify({
@@ -1341,6 +1386,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
 
     app.post('/v1/responses', async (req, res) => {
         try {
+            const { requestId, log } = createRequestLogger(req, res);
             const { 
                 model, 
                 input, 
@@ -1362,11 +1408,12 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 'medium'
             );
 
-            logDebug('Responses API request', { 
+            log('Responses API request', { 
                 model, 
                 reasoning_effort: reasoning_effort || requestReasoning?.effort,
                 reasoningLevel,
-                max_output_tokens 
+                max_output_tokens,
+                stream
             });
 
             let messages = [];
@@ -1438,6 +1485,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
             }
 
             if (!messages.length) {
+                log('Responses request rejected', { reason: 'input is required' });
                 return res.status(400).json({ error: { message: 'input is required' } });
             }
 
@@ -1448,6 +1496,9 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
             const resolvedModel = await resolveRequestedModel(model);
             const pID = resolvedModel.providerID;
             const mID = resolvedModel.modelID;
+            if (resolvedModel.aliasFrom) {
+                log('Resolved model alias', { from: resolvedModel.aliasFrom, to: resolvedModel.resolved });
+            }
 
             await ensureBackend(config);
 
@@ -1462,6 +1513,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
             if (!sessionId) {
                 throw new Error('Failed to create OpenCode session');
             }
+            log('Responses session created', { sessionId, model: `${pID}/${mID}` });
 
             const parts = [];
             let fullPromptText = '';
@@ -1819,6 +1871,7 @@ async function ensureBackend(config) {
         MANAGE_BACKEND,
         PROMPT_MODE
     } = config;
+    const backendPassword = OPENCODE_SERVER_PASSWORD || '';
     const stateKey = OPENCODE_SERVER_URL;
 
     if (!backendState.has(stateKey)) {
@@ -1993,8 +2046,10 @@ async function ensureBackend(config) {
         };
 
         const spawnArgs = ['serve', '--port', port, '--hostname', '127.0.0.1'];
-        if (ZEN_API_KEY) {
-            spawnArgs.push('--password', ZEN_API_KEY);
+        if (backendPassword) {
+            spawnArgs.push('--password', backendPassword);
+        } else if (ZEN_API_KEY) {
+            console.warn('[Proxy] ZEN_API_KEY is configured but OPENCODE_SERVER_PASSWORD is empty. ZEN_API_KEY will not be used as backend password.');
         }
         state.process = spawn(opencodeBin, spawnArgs, spawnOptions);
 
@@ -2082,6 +2137,7 @@ export function startProxy(options) {
             String(process.env.OPENCODE_PROXY_DEBUG || '').toLowerCase() === 'true' ||
             process.env.OPENCODE_PROXY_DEBUG === '1',
         ZEN_API_KEY: options.ZEN_API_KEY || process.env.OPENCODE_ZEN_API_KEY || '',
+        MODEL_CACHE_MS: Number(options.MODEL_CACHE_MS || process.env.OPENCODE_PROXY_MODEL_CACHE_MS || 60 * 1000),
         PROMPT_MODE: promptMode,
         OMIT_SYSTEM_PROMPT: normalizeBool(options.OMIT_SYSTEM_PROMPT) ??
             normalizeBool(process.env.OPENCODE_PROXY_OMIT_SYSTEM_PROMPT) ??

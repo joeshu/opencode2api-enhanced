@@ -62,6 +62,7 @@ const finalConfig = {
     REQUEST_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_REQUEST_TIMEOUT_MS) || fileConfig.REQUEST_TIMEOUT_MS || 180000,
     DEBUG: parseBool(process.env.OPENCODE_PROXY_DEBUG, parseBool(fileConfig.DEBUG, false)),
     ZEN_API_KEY: process.env.OPENCODE_ZEN_API_KEY || fileConfig.ZEN_API_KEY || '',
+    MODEL_CACHE_MS: parseInt(process.env.OPENCODE_PROXY_MODEL_CACHE_MS) || fileConfig.MODEL_CACHE_MS || 60000,
     PROMPT_MODE: process.env.OPENCODE_PROXY_PROMPT_MODE || fileConfig.PROMPT_MODE || defaultConfig.PROMPT_MODE,
     OMIT_SYSTEM_PROMPT: parseBool(process.env.OPENCODE_PROXY_OMIT_SYSTEM_PROMPT, parseBool(fileConfig.OMIT_SYSTEM_PROMPT, defaultConfig.OMIT_SYSTEM_PROMPT)),
     AUTO_CLEANUP_CONVERSATIONS: parseBool(process.env.OPENCODE_PROXY_AUTO_CLEANUP_CONVERSATIONS, parseBool(fileConfig.AUTO_CLEANUP_CONVERSATIONS, defaultConfig.AUTO_CLEANUP_CONVERSATIONS)),
@@ -96,6 +97,7 @@ console.log(`  - Backend Password: ${finalConfig.OPENCODE_SERVER_PASSWORD ? 'Con
 console.log(`  - OpenCode Path: ${finalConfig.OPENCODE_PATH}`);
 console.log(`  - API Key: ${finalConfig.API_KEY ? 'Configured' : 'Not configured (no auth)'}`);
 console.log(`  - Zen API Key: ${finalConfig.ZEN_API_KEY ? 'Configured' : 'Not configured'}`);
+console.log(`  - Model Cache TTL: ${finalConfig.MODEL_CACHE_MS}ms`);
 console.log(`  - Disable Tools: ${finalConfig.DISABLE_TOOLS ? 'Yes' : 'No'}`);
 console.log(`  - Use Isolated Home: ${finalConfig.USE_ISOLATED_HOME ? 'Yes' : 'No'}`);
 console.log(`  - Request Timeout: ${finalConfig.REQUEST_TIMEOUT_MS}ms`);
