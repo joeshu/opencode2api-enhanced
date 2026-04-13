@@ -10,6 +10,8 @@
 
 将本地 [OpenCode](https://opencode.ai) 运行时转换为 OpenAI 兼容 API 网关。在任何 OpenAI 客户端中使用免费模型 (GPT, Nemotron, MiniMax)。
 
+> Docker 镜像：`ghcr.io/joeshu/opencode2api-enhanced:latest`
+
 ---
 
 ## ✨ 功能特性
@@ -31,6 +33,9 @@
 ### Docker 部署 (推荐)
 
 ```bash
+# 直接使用已发布镜像
+# docker pull ghcr.io/joeshu/opencode2api-enhanced:latest
+
 # 1. 克隆并配置
 git clone https://github.com/joeshu/opencode2api.git
 cd opencode2api
