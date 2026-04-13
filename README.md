@@ -21,6 +21,8 @@
 | 🧠 **推理控制** | 支持 `reasoning_effort` 和 `reasoning: { "effort": "high" }` |
 | 🐳 **Docker 部署** | 一键部署，自动启动 OpenCode 后端 |
 | 🛡️ **工具安全** | 默认禁用工具调用 |
+| ❤️ **分层健康检查** | 新增 `/health/live` 与 `/health/ready`，并返回 backend 可达性与启动状态 |
+| 🚀 **更好的并发** | 移除 Chat Completions 全局请求锁，避免长请求阻塞后续请求 |
 
 ---
 
@@ -88,6 +90,19 @@ curl -N -X POST http://127.0.0.1:10000/v1/responses \
     "reasoning": {"effort": "high"},
     "stream": true
   }'
+```
+
+### 健康检查
+
+```bash
+# 存活探针
+curl http://127.0.0.1:10000/health/live
+
+# 就绪探针（backend 不可达时返回 503）
+curl http://127.0.0.1:10000/health/ready
+
+# 详细状态（包含 backend reachable / startupMode / lastReadyAt）
+curl http://127.0.0.1:10000/health
 ```
 
 ---
