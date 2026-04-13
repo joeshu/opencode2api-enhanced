@@ -126,7 +126,7 @@ curl http://127.0.0.1:10000/health
 | `OPENCODE_SERVER_PORT` | `10001` | OpenCode 后端服务端口 |
 | `API_KEY` | - | Bearer Token 认证密钥 |
 | `BIND_HOST` | `0.0.0.0` | 绑定地址 |
-| `DISABLE_TOOLS` | `true` | 禁用 OpenCode 工具调用 |
+| `OPENCODE_DISABLE_TOOLS` | `true` | 禁用 OpenCode 工具调用 |
 | `USE_ISOLATED_HOME` | `false` | 使用隔离的 OpenCode 配置目录 |
 | `OPENCODE_PROXY_PROMPT_MODE` | `standard` | 提示词处理模式 |
 | `OPENCODE_PROXY_OMIT_SYSTEM_PROMPT` | `false` | 忽略传入的 system prompt |
@@ -147,7 +147,7 @@ curl http://127.0.0.1:10000/health
 ```env
 API_KEY=your-secret-key
 OPENCODE_SERVER_PASSWORD=your-password
-DISABLE_TOOLS=true
+OPENCODE_DISABLE_TOOLS=true
 OPENCODE_PROXY_PROMPT_MODE=plugin-inject
 OPENCODE_PROXY_OMIT_SYSTEM_PROMPT=true
 OPENCODE_PROXY_AUTO_CLEANUP_CONVERSATIONS=true
