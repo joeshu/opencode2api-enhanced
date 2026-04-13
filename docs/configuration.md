@@ -30,6 +30,9 @@
 | 变量 | 默认值 | 说明 |
 |:-----|:-------|:-----|
 | `OPENCODE_DISABLE_TOOLS` | `true` | 禁用 OpenCode 工具调用 |
+| `OPENCODE_PROXY_MAX_IMAGE_BYTES` | `10485760` | 远程图片抓取最大字节数 |
+| `OPENCODE_PROXY_ALLOW_PRIVATE_IMAGE_HOSTS` | `false` | 是否允许抓取内网/回环图片地址 |
+| `OPENCODE_PROXY_MAX_CONCURRENT_REQUESTS` | `8` | 同时处理的最大请求数 |
 | `USE_ISOLATED_HOME` | `false` | 使用隔离的 OpenCode 配置目录 |
 | `PROMPT_MODE` | `standard` | 提示词处理模式 |
 | `OMIT_SYSTEM_PROMPT` | `false` | 忽略传入的 system prompt |
@@ -56,6 +59,9 @@
     "API_KEY": "your-secret-api-key",
     "BIND_HOST": "0.0.0.0",
     "OPENCODE_DISABLE_TOOLS": true,
+    "MAX_IMAGE_BYTES": 10485760,
+    "ALLOW_PRIVATE_IMAGE_HOSTS": false,
+    "MAX_CONCURRENT_REQUESTS": 8,
     "USE_ISOLATED_HOME": false,
     "PROMPT_MODE": "standard",
     "OMIT_SYSTEM_PROMPT": false,
@@ -89,6 +95,9 @@ OPENCODE_DISABLE_TOOLS=true
 OPENCODE_PROXY_PROMPT_MODE=plugin-inject
 OPENCODE_PROXY_OMIT_SYSTEM_PROMPT=true
 OPENCODE_PROXY_AUTO_CLEANUP_CONVERSATIONS=true
+OPENCODE_PROXY_MAX_IMAGE_BYTES=10485760
+OPENCODE_PROXY_ALLOW_PRIVATE_IMAGE_HOSTS=false
+OPENCODE_PROXY_MAX_CONCURRENT_REQUESTS=8
 ```
 
 ### 💻 本地开发

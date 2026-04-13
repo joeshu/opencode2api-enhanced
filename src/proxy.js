@@ -11,43 +11,124 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const DEFAULT_ALLOWED_IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
-async function getImageDataUri(url) {
+function isPrivateHostname(hostname) {
+    const normalized = (hostname || '').trim().toLowerCase();
+    if (!normalized) return true;
+    if (normalized === 'localhost' || normalized === '::1' || normalized === '[::1]') return true;
+    if (/^127\./.test(normalized)) return true;
+    if (/^10\./.test(normalized)) return true;
+    if (/^192\.168\./.test(normalized)) return true;
+    if (/^169\.254\./.test(normalized)) return true;
+    const match172 = normalized.match(/^172\.(\d+)\./);
+    if (match172) {
+        const second = Number(match172[1]);
+        if (second >= 16 && second <= 31) return true;
+    }
+    if (normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe80:')) return true;
+    return false;
+}
+
+function createProxyError(message, statusCode = 500, code = 'internal_error', extra = {}) {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    error.code = code;
+    Object.assign(error, extra);
+    return error;
+}
+
+function normalizeProxyError(error) {
+    if (error?.statusCode && error?.code) return error;
+    const message = error?.message || 'Unknown error';
+    if (message.includes('Unauthorized')) return createProxyError(message, 401, 'authentication_error');
+    if (message.includes('Request timeout')) return createProxyError(message, 504, 'upstream_timeout_error');
+    if (message.includes('ECONNREFUSED') || message.includes('network') || message.includes('connect ')) return createProxyError(message, 502, 'upstream_connection_error');
+    return createProxyError(message, error?.statusCode || 500, error?.code || 'internal_error', {
+        availableModels: error?.availableModels
+    });
+}
+
+async function getImageDataUri(url, options = {}) {
     if (url.startsWith('data:')) {
         return url;
     }
     
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
-        throw new Error(`Invalid URL scheme: ${url}`);
+        throw createProxyError(`Invalid URL scheme: ${url}`, 400, 'invalid_request_error');
+    }
+
+    let parsedUrl;
+    try {
+        parsedUrl = new URL(url);
+    } catch (error) {
+        throw createProxyError(`Invalid image URL: ${url}`, 400, 'invalid_request_error');
+    }
+
+    const maxImageBytes = Number.isFinite(Number(options.maxImageBytes)) && Number(options.maxImageBytes) > 0
+        ? Number(options.maxImageBytes)
+        : DEFAULT_MAX_IMAGE_BYTES;
+    const allowPrivateHosts = options.allowPrivateHosts === true;
+    const allowedMimeTypes = Array.isArray(options.allowedMimeTypes) && options.allowedMimeTypes.length
+        ? options.allowedMimeTypes
+        : DEFAULT_ALLOWED_IMAGE_MIME_TYPES;
+
+    if (!allowPrivateHosts && isPrivateHostname(parsedUrl.hostname)) {
+        throw createProxyError(`Private image host is not allowed: ${parsedUrl.hostname}`, 400, 'invalid_image_url');
     }
     
     return new Promise((resolve, reject) => {
-        const protocol = url.startsWith('https') ? https : http;
+        const protocol = parsedUrl.protocol === 'https:' ? https : http;
         
-        const req = protocol.get(url, { timeout: 10000 }, (res) => {
+        const req = protocol.get(parsedUrl, { timeout: 10000 }, (res) => {
             if (res.statusCode !== 200) {
-                return reject(new Error(`Failed to fetch image: HTTP ${res.statusCode}`));
+                return reject(createProxyError(`Failed to fetch image: HTTP ${res.statusCode}`, 400, 'invalid_image_url'));
             }
             
-            const contentType = res.headers['content-type'] || 'image/jpeg';
-            const chunks = [];
+            const contentType = (res.headers['content-type'] || 'image/jpeg').split(';')[0].trim().toLowerCase();
+            if (!allowedMimeTypes.includes(contentType)) {
+                req.destroy();
+                return reject(createProxyError(`Unsupported image content type: ${contentType}`, 400, 'invalid_image_url'));
+            }
+
+            const contentLength = Number(res.headers['content-length'] || 0);
+            if (contentLength && contentLength > maxImageBytes) {
+                req.destroy();
+                return reject(createProxyError(`Image too large: ${contentLength} bytes`, 413, 'image_too_large'));
+            }
             
-            res.on('data', (chunk) => chunks.push(chunk));
+            const chunks = [];
+            let totalBytes = 0;
+            let aborted = false;
+            
+            res.on('data', (chunk) => {
+                if (aborted) return;
+                totalBytes += chunk.length;
+                if (totalBytes > maxImageBytes) {
+                    aborted = true;
+                    req.destroy();
+                    reject(createProxyError(`Image too large: exceeded ${maxImageBytes} bytes`, 413, 'image_too_large'));
+                    return;
+                }
+                chunks.push(chunk);
+            });
             res.on('end', () => {
+                if (aborted) return;
                 try {
                     const buffer = Buffer.concat(chunks);
                     const base64 = buffer.toString('base64');
                     resolve(`data:${contentType};base64,${base64}`);
                 } catch (e) {
-                    reject(new Error(`Failed to encode image: ${e.message}`));
+                    reject(createProxyError(`Failed to encode image: ${e.message}`, 500, 'internal_error'));
                 }
             });
         });
         
-        req.on('error', (e) => reject(e));
+        req.on('error', (e) => reject(normalizeProxyError(e)));
         req.on('timeout', () => {
             req.destroy();
-            reject(new Error('Image fetch timeout'));
+            reject(createProxyError('Image fetch timeout', 504, 'upstream_timeout_error'));
         });
     });
 }
@@ -303,9 +384,30 @@ export function createApp(config) {
     const MODEL_CACHE_MS = Number.isFinite(Number(config.MODEL_CACHE_MS)) && Number(config.MODEL_CACHE_MS) > 0
         ? Number(config.MODEL_CACHE_MS)
         : 60 * 1000;
+    const MAX_IMAGE_BYTES = Number.isFinite(Number(config.MAX_IMAGE_BYTES)) && Number(config.MAX_IMAGE_BYTES) > 0
+        ? Number(config.MAX_IMAGE_BYTES)
+        : DEFAULT_MAX_IMAGE_BYTES;
     let cachedProvidersList = null;
     let cachedModelsList = null;
     let cachedModelsAt = 0;
+    const ALLOW_PRIVATE_IMAGE_HOSTS = config.ALLOW_PRIVATE_IMAGE_HOSTS === true;
+
+    const MAX_CONCURRENT_REQUESTS = Number.isFinite(Number(config.MAX_CONCURRENT_REQUESTS)) && Number(config.MAX_CONCURRENT_REQUESTS) > 0
+        ? Number(config.MAX_CONCURRENT_REQUESTS)
+        : 8;
+    let activeRequests = 0;
+
+    const withRequestSlot = async (requestId, task) => {
+        if (activeRequests >= MAX_CONCURRENT_REQUESTS) {
+            throw createProxyError(`Too many concurrent requests: limit ${MAX_CONCURRENT_REQUESTS}`, 429, 'rate_limit_exceeded');
+        }
+        activeRequests += 1;
+        try {
+            return await task();
+        } finally {
+            activeRequests = Math.max(0, activeRequests - 1);
+        }
+    };
 
     const createRequestLogger = (req, res) => {
         const requestId = req.headers['x-request-id'] || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -314,7 +416,7 @@ export function createApp(config) {
         }
         const startedAt = Date.now();
         const log = (event, data = {}) => {
-            logDebug(event, { requestId, elapsedMs: Date.now() - startedAt, ...data });
+            logDebug(event, { requestId, elapsedMs: Date.now() - startedAt, ...data, activeRequests, maxConcurrentRequests: MAX_CONCURRENT_REQUESTS });
         };
         return { requestId, startedAt, log };
     };
@@ -900,7 +1002,10 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                             : part.image_url?.url;
                                         if (imageUrl) {
                                             try {
-                                                const dataUri = await getImageDataUri(imageUrl);
+                                                const dataUri = await getImageDataUri(imageUrl, {
+                                                    maxImageBytes: MAX_IMAGE_BYTES,
+                                                    allowPrivateHosts: ALLOW_PRIVATE_IMAGE_HOSTS
+                                                });
                                                 const mime = dataUri.split(';')[0].split(':')[1];
                                                 parts.push({
                                                     type: 'file',
@@ -1343,12 +1448,20 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
 }
 
     app.post('/v1/chat/completions', async (req, res) => {
+        const requestId = req.headers['x-request-id'] || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         try {
-            await handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_MS);
+            await withRequestSlot(requestId, async () => handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_MS));
         } catch (error) {
-            console.error('[Proxy] Request Handler Error:', error.message);
+            const normalizedError = normalizeProxyError(error);
+            console.error('[Proxy] Request Handler Error:', normalizedError.message);
             if (!res.headersSent) {
-                res.status(500).json({ error: { message: error.message, type: error.constructor.name } });
+                res.status(normalizedError.statusCode || 500).json({
+                    error: {
+                        message: normalizedError.message,
+                        type: normalizedError.code || normalizedError.constructor.name,
+                        ...(normalizedError.availableModels && { available_models: normalizedError.availableModels })
+                    }
+                });
             }
         }
     });
@@ -1385,7 +1498,9 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
     });
 
     app.post('/v1/responses', async (req, res) => {
+        const requestId = req.headers['x-request-id'] || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         try {
+            await withRequestSlot(requestId, async () => {
             const { requestId, log } = createRequestLogger(req, res);
             const { 
                 model, 
@@ -1797,14 +1912,15 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
             } catch (e) { }
 
             return res.json(response);
+            });
         } catch (error) {
             console.error('[Proxy] Responses API Error:', error.message);
-            const statusCode = error.statusCode || 500;
-            res.status(statusCode).json({ 
+            const normalizedError = normalizeProxyError(error);
+            res.status(normalizedError.statusCode || 500).json({ 
                 error: { 
-                    message: error.message,
-                    type: error.code || error.constructor.name,
-                    ...(error.availableModels && { available_models: error.availableModels })
+                    message: normalizedError.message,
+                    type: normalizedError.code || normalizedError.constructor.name,
+                    ...(normalizedError.availableModels && { available_models: normalizedError.availableModels })
                 } 
             });
         }
@@ -2138,6 +2254,11 @@ export function startProxy(options) {
             process.env.OPENCODE_PROXY_DEBUG === '1',
         ZEN_API_KEY: options.ZEN_API_KEY || process.env.OPENCODE_ZEN_API_KEY || '',
         MODEL_CACHE_MS: Number(options.MODEL_CACHE_MS || process.env.OPENCODE_PROXY_MODEL_CACHE_MS || 60 * 1000),
+        MAX_IMAGE_BYTES: Number(options.MAX_IMAGE_BYTES || process.env.OPENCODE_PROXY_MAX_IMAGE_BYTES || DEFAULT_MAX_IMAGE_BYTES),
+        ALLOW_PRIVATE_IMAGE_HOSTS: normalizeBool(options.ALLOW_PRIVATE_IMAGE_HOSTS) ??
+            normalizeBool(process.env.OPENCODE_PROXY_ALLOW_PRIVATE_IMAGE_HOSTS) ??
+            false,
+        MAX_CONCURRENT_REQUESTS: Number(options.MAX_CONCURRENT_REQUESTS || process.env.OPENCODE_PROXY_MAX_CONCURRENT_REQUESTS || 8),
         PROMPT_MODE: promptMode,
         OMIT_SYSTEM_PROMPT: normalizeBool(options.OMIT_SYSTEM_PROMPT) ??
             normalizeBool(process.env.OPENCODE_PROXY_OMIT_SYSTEM_PROMPT) ??
