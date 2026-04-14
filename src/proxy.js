@@ -22,6 +22,7 @@ import {
 } from './timeouts.js';
 import { createModelsRuntime } from './models.js';
 import { DEFAULT_MAX_IMAGE_BYTES, getImageDataUri } from './image.js';
+import { buildSystemPrompt, normalizeReasoningEffort, stripFunctionCalls, createToolCallFilter } from './prompt-utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -301,73 +302,6 @@ export function createApp(config) {
         if (DEBUG) {
             console.log('[Proxy][Debug]', ...args);
         }
-    };
-
-    const TOOL_GUARD_MESSAGE = 'Tools are disabled. Do not call tools or function calls. Answer directly from the conversation and general knowledge. If external or real-time data is required, say so and ask the user to enable tools.';
-    const buildSystemPrompt = (systemMsg, reasoningEffort = null) => {
-        const parts = [];
-        if (!OMIT_SYSTEM_PROMPT && systemMsg && systemMsg.trim()) {
-            parts.push(systemMsg.trim());
-        }
-        if (reasoningEffort && reasoningEffort !== 'none') {
-            parts.push(`[Reasoning Effort: ${reasoningEffort}]`);
-        }
-        if (DISABLE_TOOLS && PROMPT_MODE !== 'plugin-inject') {
-            parts.push(TOOL_GUARD_MESSAGE);
-        }
-        const finalPrompt = parts.join('\n\n').trim();
-        return finalPrompt || undefined;
-    };
-
-    const normalizeReasoningEffort = (value, fallback = null) => {
-        if (!value || typeof value !== 'string') return fallback;
-        const effortMap = {
-            'none': 'none',
-            'minimal': 'none',
-            'low': 'low',
-            'medium': 'medium',
-            'high': 'high',
-            'xhigh': 'high'
-        };
-        return effortMap[value.toLowerCase()] || fallback;
-    };
-
-    const stripFunctionCalls = (text, trim = true) => {
-        if (!DISABLE_TOOLS || !text) return text;
-        const cleaned = text
-            .replace(/<function_calls>[\s\S]*?<\/function_calls>/g, '')
-            .replace(/<\/?function_calls>/g, '');
-        return trim ? cleaned.trim() : cleaned;
-    };
-
-    const createToolCallFilter = () => {
-        if (!DISABLE_TOOLS) return (chunk) => chunk;
-        let inBlock = false;
-        return (chunk) => {
-            if (!chunk) return chunk;
-            let output = '';
-            let remaining = chunk;
-            while (remaining.length) {
-                if (inBlock) {
-                    const endIdx = remaining.indexOf('</function_calls>');
-                    if (endIdx === -1) {
-                        return output;
-                    }
-                    remaining = remaining.slice(endIdx + '</function_calls>'.length);
-                    inBlock = false;
-                    continue;
-                }
-                const startIdx = remaining.indexOf('<function_calls>');
-                if (startIdx === -1) {
-                    output += remaining;
-                    return output;
-                }
-                output += remaining.slice(0, startIdx);
-                remaining = remaining.slice(startIdx + '<function_calls>'.length);
-                inBlock = true;
-            }
-            return output;
-        };
     };
 
     const TOOL_IDS_CACHE_MS = 5 * 60 * 1000;
@@ -789,7 +723,11 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     };
 
                     const { parts, system: systemMsg, fullPromptText, lastUserMsg } = await buildPromptParts(messages);
-                    const systemWithGuard = buildSystemPrompt(systemMsg, requestParams.reasoning_effort);
+                    const systemWithGuard = buildSystemPrompt(systemMsg, requestParams.reasoning_effort, {
+                        omitSystemPrompt: OMIT_SYSTEM_PROMPT,
+                        disableTools: DISABLE_TOOLS,
+                        promptMode: PROMPT_MODE
+                    });
                     if (!parts.length) {
                         return res.status(400).json({ error: { message: 'messages must include at least one non-system text message' } });
                     }
@@ -851,8 +789,8 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     res.setHeader('Connection', 'keep-alive');
 
                     if (stream) {
-                        const filterContentDelta = createToolCallFilter();
-                        const filterReasoningDelta = createToolCallFilter();
+                        const filterContentDelta = createToolCallFilter(DISABLE_TOOLS);
+                        const filterReasoningDelta = createToolCallFilter(DISABLE_TOOLS);
                         let streamedContent = '';
                         let streamedReasoning = '';
                         insideReasoning = false;
@@ -969,8 +907,8 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             if (error && !content && !reasoning) {
                                 sendDelta(`[Proxy Error] ${error.name || 'OpenCodeError'}: ${error.data?.message || error.message || 'Unknown error'}`);
                             } else {
-                                const safeReasoning = stripFunctionCalls(reasoning, false);
-                                const safeContent = stripFunctionCalls(content, false);
+                                const safeReasoning = stripFunctionCalls(reasoning, false, DISABLE_TOOLS);
+                                const safeContent = stripFunctionCalls(content, false, DISABLE_TOOLS);
                                 if (safeReasoning) sendDelta(safeReasoning, true);
                                 if (safeContent) sendDelta(safeContent, false);
                             }
@@ -984,8 +922,8 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             if (error && !content && !reasoning) {
                                 sendDelta(`[Proxy Error] ${error.name || 'OpenCodeError'}: ${error.data?.message || error.message || 'Unknown error'}`);
                             } else {
-                                const safeReasoning = stripFunctionCalls(reasoning, false);
-                                const safeContent = stripFunctionCalls(content, false);
+                                const safeReasoning = stripFunctionCalls(reasoning, false, DISABLE_TOOLS);
+                                const safeContent = stripFunctionCalls(content, false, DISABLE_TOOLS);
                                 if (safeReasoning) sendDelta(safeReasoning, true);
                                 if (safeContent) sendDelta(safeContent, false);
                             }
@@ -999,8 +937,8 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             if (error && !content && !reasoning) {
                                 sendDelta(`[Proxy Error] ${error.name || 'OpenCodeError'}: ${error.data?.message || error.message || 'Unknown error'}`);
                             } else {
-                                const safeReasoning = stripFunctionCalls(reasoning, false);
-                                const safeContent = stripFunctionCalls(content, false);
+                                const safeReasoning = stripFunctionCalls(reasoning, false, DISABLE_TOOLS);
+                                const safeContent = stripFunctionCalls(content, false, DISABLE_TOOLS);
                                 const remainingReasoning = safeReasoning && safeReasoning.startsWith(streamedReasoning)
                                     ? safeReasoning.slice(streamedReasoning.length)
                                     : safeReasoning;
@@ -1033,8 +971,8 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                 if (error && !pollContent && !pollReasoning) {
                                     sendDelta(`[Proxy Error] ${error.name || 'OpenCodeError'}: ${error.data?.message || error.message || 'Unknown error'}`);
                                 } else {
-                                    const safeReasoning = stripFunctionCalls(pollReasoning || '', false);
-                                    const safeContent = stripFunctionCalls(pollContent || '', false);
+                                    const safeReasoning = stripFunctionCalls(pollReasoning || '', false, DISABLE_TOOLS);
+                                    const safeContent = stripFunctionCalls(pollContent || '', false, DISABLE_TOOLS);
                                     logDebug('Polling fallback result', {
                                         sessionId,
                                         contentLen: safeContent.length,
@@ -1106,8 +1044,8 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                 }
                             });
                         }
-                        const safeContent = stripFunctionCalls(content);
-                        const safeReasoning = stripFunctionCalls(reasoning);
+                        const safeContent = stripFunctionCalls(content, true, DISABLE_TOOLS);
+                        const safeReasoning = stripFunctionCalls(reasoning, true, DISABLE_TOOLS);
 
                         const promptTokens = Math.ceil((fullPromptText || '').length / 4);
                         const completionTokensCalc = Math.ceil((content || '').length / 4);
@@ -1404,7 +1342,15 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 path: { id: sessionId },
                 body: {
                     model: { providerID: pID, modelID: mID },
-                    ...(buildSystemPrompt(instructions, reasoningLevel) ? { system: buildSystemPrompt(instructions, reasoningLevel) } : {}),
+                    ...(buildSystemPrompt(instructions, reasoningLevel, {
+                        omitSystemPrompt: OMIT_SYSTEM_PROMPT,
+                        disableTools: DISABLE_TOOLS,
+                        promptMode: PROMPT_MODE
+                    }) ? { system: buildSystemPrompt(instructions, reasoningLevel, {
+                        omitSystemPrompt: OMIT_SYSTEM_PROMPT,
+                        disableTools: DISABLE_TOOLS,
+                        promptMode: PROMPT_MODE
+                    }) } : {}),
                     parts,
                     ...(max_output_tokens && { max_tokens: max_output_tokens }),
                     ...(temperature !== undefined && { temperature }),
@@ -1437,8 +1383,8 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     response: { id: responseId, object: 'response', created: Math.floor(Date.now() / 1000), model: `${pID}/${mID}` }
                 });
 
-                const filterContentDelta = createToolCallFilter();
-                const filterReasoningDelta = createToolCallFilter();
+                const filterContentDelta = createToolCallFilter(DISABLE_TOOLS);
+                const filterReasoningDelta = createToolCallFilter(DISABLE_TOOLS);
                 const ensureOutputScaffold = () => {
                     if (!announcedOutput) {
                         emit({
