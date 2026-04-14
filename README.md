@@ -59,11 +59,18 @@ npm install -g opencode-ai
 # Linux/macOS: curl -fsSL https://opencode.ai/install | bash
 
 # 2. 克隆并运行
-git clone https://github.com/TiaraBasori/opencode2api.git
-cd opencode2api
+git clone https://github.com/joeshu/opencode2api-enhanced.git
+cd opencode2api-enhanced
 npm install
 cp config.json.example config.json
 npm start
+```
+
+### 本地 smoke 验证
+
+```bash
+# 不依赖 Jest，使用内置 mock backend 验证主链路
+npm run verify:smoke
 ```
 
 ---
