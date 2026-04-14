@@ -12,6 +12,16 @@ import { fileURLToPath } from 'url';
 import { createProxyError, normalizeProxyError } from './errors.js';
 import { backendState, buildBackendAuthHeaders, checkHealth, getBackendHealthStatus } from './backend-health.js';
 import { createRequestRuntime } from './request-runtime.js';
+import {
+    DEFAULT_REQUEST_TIMEOUT_MS,
+    DEFAULT_SERVER_REQUEST_TIMEOUT_MS,
+    DEFAULT_SERVER_HEADERS_TIMEOUT_MS,
+    DEFAULT_SERVER_KEEPALIVE_TIMEOUT_MS,
+    DEFAULT_SERVER_SOCKET_TIMEOUT_MS,
+    DEFAULT_SHUTDOWN_GRACE_MS,
+    resolveServerTimeouts,
+    resolveShutdownGraceMs
+} from './timeouts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -121,12 +131,6 @@ const STARTUP_WAIT_ITERATIONS = 60;
 const STARTUP_WAIT_INTERVAL_MS = 2000;
 const STARTING_WAIT_ITERATIONS = 120;
 const STARTING_WAIT_INTERVAL_MS = 1000;
-const DEFAULT_REQUEST_TIMEOUT_MS = 300000;
-const DEFAULT_SERVER_REQUEST_TIMEOUT_MS = DEFAULT_REQUEST_TIMEOUT_MS + 30000;
-const DEFAULT_SERVER_HEADERS_TIMEOUT_MS = 65000;
-const DEFAULT_SERVER_KEEPALIVE_TIMEOUT_MS = 5000;
-const DEFAULT_SERVER_SOCKET_TIMEOUT_MS = DEFAULT_REQUEST_TIMEOUT_MS + 60000;
-const DEFAULT_SHUTDOWN_GRACE_MS = 10000;
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_EVENT_FIRST_DELTA_TIMEOUT_MS = 120000;
 const DEFAULT_EVENT_IDLE_TIMEOUT_MS = 20000;
@@ -334,18 +338,12 @@ export function createApp(config) {
     } = config;
 
     const app = express();
-    const SERVER_REQUEST_TIMEOUT_MS = Number.isFinite(Number(config.SERVER_REQUEST_TIMEOUT_MS)) && Number(config.SERVER_REQUEST_TIMEOUT_MS) > 0
-        ? Number(config.SERVER_REQUEST_TIMEOUT_MS)
-        : Math.max(REQUEST_TIMEOUT_MS + 30000, DEFAULT_SERVER_REQUEST_TIMEOUT_MS);
-    const SERVER_HEADERS_TIMEOUT_MS = Number.isFinite(Number(config.SERVER_HEADERS_TIMEOUT_MS)) && Number(config.SERVER_HEADERS_TIMEOUT_MS) > 0
-        ? Number(config.SERVER_HEADERS_TIMEOUT_MS)
-        : DEFAULT_SERVER_HEADERS_TIMEOUT_MS;
-    const SERVER_KEEPALIVE_TIMEOUT_MS = Number.isFinite(Number(config.SERVER_KEEPALIVE_TIMEOUT_MS)) && Number(config.SERVER_KEEPALIVE_TIMEOUT_MS) > 0
-        ? Number(config.SERVER_KEEPALIVE_TIMEOUT_MS)
-        : DEFAULT_SERVER_KEEPALIVE_TIMEOUT_MS;
-    const SERVER_SOCKET_TIMEOUT_MS = Number.isFinite(Number(config.SERVER_SOCKET_TIMEOUT_MS)) && Number(config.SERVER_SOCKET_TIMEOUT_MS) > 0
-        ? Number(config.SERVER_SOCKET_TIMEOUT_MS)
-        : Math.max(SERVER_REQUEST_TIMEOUT_MS + 30000, DEFAULT_SERVER_SOCKET_TIMEOUT_MS);
+    const {
+        SERVER_REQUEST_TIMEOUT_MS,
+        SERVER_HEADERS_TIMEOUT_MS,
+        SERVER_KEEPALIVE_TIMEOUT_MS,
+        SERVER_SOCKET_TIMEOUT_MS
+    } = resolveServerTimeouts(config, REQUEST_TIMEOUT_MS);
     app.use(cors({
         origin: '*',
         methods: ['GET', 'POST', 'OPTIONS'],
@@ -2249,9 +2247,7 @@ export function startProxy(options) {
     };
 
     const shutdown = (reason = 'shutdown') => new Promise((resolve) => {
-        const graceMs = Number.isFinite(Number(config.SHUTDOWN_GRACE_MS)) && Number(config.SHUTDOWN_GRACE_MS) > 0
-            ? Number(config.SHUTDOWN_GRACE_MS)
-            : DEFAULT_SHUTDOWN_GRACE_MS;
+        const graceMs = resolveShutdownGraceMs(config);
         let settled = false;
         const finalize = () => {
             if (settled) return;
