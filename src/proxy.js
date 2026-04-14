@@ -31,6 +31,7 @@ import { promptWithTimeout } from './prompt-executor.js';
 import { cleanupConversationFiles, registerConversationCleanup } from './conversation-cleanup.js';
 import { createServerRuntime } from './server-runtime.js';
 import { buildStartProxyConfig } from './start-proxy-config.js';
+import { buildChatCompletionResponse, buildResponsesApiResponse } from './response-builders.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 registerProcessCleanup();
