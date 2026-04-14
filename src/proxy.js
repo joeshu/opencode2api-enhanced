@@ -26,6 +26,7 @@ import { createToolOverridesRuntime } from './tool-overrides.js';
 import { pollForAssistantResponse, collectFromEvents } from './events.js';
 import { resolveOpencodePath } from './opencode-path.js';
 import { ensureBackend } from './backend-runtime.js';
+import { buildChatPromptParts, normalizeResponsesMessages } from './message-orchestration.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 registerProcessCleanup();
@@ -256,94 +257,11 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         log('Resolved model alias', { from: resolvedModel.aliasFrom, to: resolvedModel.resolved });
                     }
 
-                    const normalizeMessageContent = (content) => {
-                        if (typeof content === 'string') return content;
-                        if (Array.isArray(content)) {
-                            return content.map((part) => {
-                                if (typeof part === 'string') return part;
-                                if (part && typeof part.text === 'string') return part.text;
-                                return '';
-                            }).join('');
-                        }
-                        if (content && typeof content.text === 'string') return content.text;
-                        if (content === null || content === undefined) return '';
-                        if (typeof content === 'number' || typeof content === 'boolean') return String(content);
-                        return '';
-                    };
-
-                    const buildPromptParts = async (rawMessages) => {
-                        const parts = [];
-                        const systemChunks = [];
-                        const userContents = [];
-                        
-                        for (const m of rawMessages) {
-                            const role = (m?.role || 'user').toLowerCase();
-                            const content = m?.content;
-                            
-                            if (role === 'system') {
-                                const text = normalizeMessageContent(content);
-                                if (text) systemChunks.push(text);
-                                continue;
-                            }
-                            
-                            if (!content) continue;
-                            
-                            if (typeof content === 'string') {
-                                if (role === 'user') userContents.push(content);
-                                const roleLabel = role.toUpperCase();
-                                const nameSuffix = m?.name ? `(${m.name})` : '';
-                                parts.push({
-                                    type: 'text',
-                                    text: `${roleLabel}${nameSuffix}: ${content}`
-                                });
-                            } else if (Array.isArray(content)) {
-                                for (const part of content) {
-                                    if (!part) continue;
-                                    
-                                    if (part.type === 'text') {
-                                        const text = part.text || '';
-                                        if (role === 'user') userContents.push(text);
-                                        const roleLabel = role.toUpperCase();
-                                        const nameSuffix = m?.name ? `(${m.name})` : '';
-                                        parts.push({
-                                            type: 'text',
-                                            text: `${roleLabel}${nameSuffix}: ${text}`
-                                        });
-                                    } else if (part.type === 'image_url') {
-                                        const imageUrl = typeof part.image_url === 'string' 
-                                            ? part.image_url 
-                                            : part.image_url?.url;
-                                        if (imageUrl) {
-                                            try {
-                                                const dataUri = await getImageDataUri(imageUrl, {
-                                                    maxImageBytes: MAX_IMAGE_BYTES,
-                                                    allowPrivateHosts: ALLOW_PRIVATE_IMAGE_HOSTS
-                                                });
-                                                const mime = dataUri.split(';')[0].split(':')[1];
-                                                parts.push({
-                                                    type: 'file',
-                                                    mime: mime,
-                                                    url: dataUri,
-                                                    filename: 'image'
-                                                });
-                                            } catch (imgErr) {
-                                                console.warn('[Proxy] Skipping image due to error:', imgErr.message);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        
-                        return {
-                            parts,
-                            system: systemChunks.join('\n\n'),
-                            fullPromptText: parts.map(p => p.text).join('\n\n'),
-                            lastUserMsg: userContents[userContents.length - 1] || ''
-                        };
-                    };
-
-                    const { parts, system: systemMsg, fullPromptText, lastUserMsg } = await buildPromptParts(messages);
+                    const { parts, system: systemMsg, fullPromptText, lastUserMsg } = await buildChatPromptParts(messages, {
+                        getImageDataUri,
+                        maxImageBytes: MAX_IMAGE_BYTES,
+                        allowPrivateHosts: ALLOW_PRIVATE_IMAGE_HOSTS
+                    });
                     const systemWithGuard = buildSystemPrompt(systemMsg, requestParams.reasoning_effort, {
                         omitSystemPrompt: OMIT_SYSTEM_PROMPT,
                         disableTools: DISABLE_TOOLS,
@@ -862,81 +780,16 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 stream
             });
 
-            let messages = [];
-            if (Array.isArray(chatMessages) && chatMessages.length) {
-                messages = chatMessages.map((item) => ({
-                    role: item?.role || 'user',
-                    content: Array.isArray(item?.content)
-                        ? item.content.map((part) => {
-                            if (typeof part === 'string') return part;
-                            if (part?.type === 'input_text' || part?.type === 'text' || typeof part?.text === 'string') return part.text || '';
-                            if (part?.type === 'output_text') return part.text || '';
-                            return '';
-                        }).join('')
-                        : typeof item?.content === 'string'
-                            ? item.content
-                            : item?.content?.text || ''
-                })).filter((item) => item.content);
-            } else if (typeof prompt === 'string' && prompt.trim()) {
-                messages = [{ role: 'user', content: prompt }];
-            } else if (typeof input === 'string') {
-                messages = [{ role: 'user', content: input }];
-            } else if (Array.isArray(input)) {
-                for (const item of input) {
-                    if (!item) continue;
-                    if (item.type === 'message') {
-                        const content = Array.isArray(item.content)
-                            ? item.content.map((part) => {
-                                if (typeof part === 'string') return part;
-                                if (part?.type === 'input_text' || part?.type === 'text' || typeof part?.text === 'string') return part.text || '';
-                                if (part?.type === 'output_text') return part.text || '';
-                                return '';
-                            }).join('')
-                            : item.content?.text || item.content || '';
-                        if (content) {
-                            messages.push({
-                                role: item.role || 'user',
-                                content
-                            });
-                        }
-                    } else if (item.type === 'input_text') {
-                        if (item.text) messages.push({ role: 'user', content: item.text });
-                    } else if (typeof item.text === 'string' && item.text) {
-                        messages.push({ role: item.role || 'user', content: item.text });
-                    } else if (typeof item.content === 'string' && item.content) {
-                        messages.push({ role: item.role || 'user', content: item.content });
-                    } else if (Array.isArray(item.content)) {
-                        const content = item.content.map((part) => {
-                            if (typeof part === 'string') return part;
-                            if (part?.type === 'input_text' || part?.type === 'text' || typeof part?.text === 'string') return part.text || '';
-                            if (part?.type === 'output_text') return part.text || '';
-                            return '';
-                        }).join('');
-                        if (content) {
-                            messages.push({ role: item.role || 'user', content });
-                        }
-                    }
-                }
-            } else if (input && typeof input === 'object') {
-                if (input.type === 'message') {
-                    const content = Array.isArray(input.content)
-                        ? input.content.map((part) => part?.text || '').join('')
-                        : input.content?.text || input.content || '';
-                    if (content) {
-                        messages = [{ role: input.role || 'user', content }];
-                    }
-                } else if (typeof input.text === 'string' && input.text) {
-                    messages = [{ role: input.role || 'user', content: input.text }];
-                }
-            }
+            let messages = normalizeResponsesMessages({
+                chatMessages,
+                prompt,
+                input,
+                instructions
+            });
 
             if (!messages.length) {
                 log('Responses request rejected', { reason: 'input is required' });
                 return res.status(400).json({ error: { message: 'input is required' } });
-            }
-
-            if (instructions) {
-                messages.unshift({ role: 'system', content: instructions });
             }
 
             const resolvedModel = await resolveRequestedModel(model);
