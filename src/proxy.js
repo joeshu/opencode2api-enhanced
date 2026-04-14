@@ -27,6 +27,7 @@ import { pollForAssistantResponse, collectFromEvents } from './events.js';
 import { resolveOpencodePath } from './opencode-path.js';
 import { ensureBackend } from './backend-runtime.js';
 import { buildChatPromptParts, normalizeResponsesMessages } from './message-orchestration.js';
+import { promptWithTimeout } from './prompt-executor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 registerProcessCleanup();
@@ -132,25 +133,6 @@ export function createApp(config) {
             console.log('[Proxy][Debug]', ...args);
         }
     };
-
-    async function promptWithTimeout(promptParams, timeoutMs, retryCount = 2) {
-        const attempt = async (retriesLeft) => {
-            try {
-                const timeoutPromise = new Promise((_, reject) => {
-                    setTimeout(() => reject(new Error(`Request timeout after ${timeoutMs}ms`)), timeoutMs);
-                });
-                return Promise.race([client.session.prompt(promptParams), timeoutPromise]);
-            } catch (err) {
-                if (retriesLeft > 0 && (err.message.includes('timeout') || err.message.includes('network') || err.message.includes('ECONNREFUSED'))) {
-                    logDebug('Prompt failed, retrying', { retriesLeft, error: err.message });
-                    await sleep(1000);
-                    return attempt(retriesLeft - 1);
-                }
-                throw err;
-            }
-        };
-        return attempt(retryCount);
-    }
 
     const getCleanupRoots = () => {
         const roots = [];
@@ -582,7 +564,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         res.write('data: [DONE]\n\n');
                         res.end();
                     } else {
-                        await promptWithTimeout(promptParams, REQUEST_TIMEOUT_MS);
+                        await promptWithTimeout(client, (...args) => logDebug(...args), sleep, promptParams, REQUEST_TIMEOUT_MS);
                         log('Prompt sent', { sessionId, phase: 'non-stream' });
                         const { content, reasoning, error } = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS);
                         if (error && !content && !reasoning) {
