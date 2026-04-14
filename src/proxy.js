@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import { createProxyError, normalizeProxyError } from './errors.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -29,25 +30,6 @@ function isPrivateHostname(hostname) {
     }
     if (normalized.startsWith('fc') || normalized.startsWith('fd') || normalized.startsWith('fe80:')) return true;
     return false;
-}
-
-function createProxyError(message, statusCode = 500, code = 'internal_error', extra = {}) {
-    const error = new Error(message);
-    error.statusCode = statusCode;
-    error.code = code;
-    Object.assign(error, extra);
-    return error;
-}
-
-function normalizeProxyError(error) {
-    if (error?.statusCode && error?.code) return error;
-    const message = error?.message || 'Unknown error';
-    if (message.includes('Unauthorized')) return createProxyError(message, 401, 'authentication_error');
-    if (message.includes('Request timeout')) return createProxyError(message, 504, 'upstream_timeout_error');
-    if (message.includes('ECONNREFUSED') || message.includes('network') || message.includes('connect ')) return createProxyError(message, 502, 'upstream_connection_error');
-    return createProxyError(message, error?.statusCode || 500, error?.code || 'internal_error', {
-        availableModels: error?.availableModels
-    });
 }
 
 async function getImageDataUri(url, options = {}) {
