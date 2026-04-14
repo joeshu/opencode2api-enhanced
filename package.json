@@ -8,7 +8,8 @@
     "start": "node index.js",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:unit": "npm test",
-    "test:integration": "bash tests/test-integration.sh"
+    "test:integration": "bash tests/test-integration.sh",
+    "verify:smoke": "node scripts/verify-local-smoke.mjs"
   },
   "keywords": [
     "opencode",
