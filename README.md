@@ -141,7 +141,12 @@ curl http://127.0.0.1:10000/health
 | `OPENCODE_PROXY_AUTO_CLEANUP_CONVERSATIONS` | `false` | 自动清理会话存储 |
 | `OPENCODE_PROXY_CLEANUP_INTERVAL_MS` | `43200000` | 清理间隔 (毫秒) |
 | `OPENCODE_PROXY_CLEANUP_MAX_AGE_MS` | `86400000` | 最大存储时间 (毫秒) |
-| `OPENCODE_PROXY_REQUEST_TIMEOUT_MS` | `180000` | 请求超时时间 (毫秒) |
+| `OPENCODE_PROXY_REQUEST_TIMEOUT_MS` | `180000` | 业务请求超时时间 (毫秒) |
+| `OPENCODE_PROXY_SERVER_REQUEST_TIMEOUT_MS` | `210000` | Node HTTP 服务端 requestTimeout，建议略大于业务超时 |
+| `OPENCODE_PROXY_SERVER_HEADERS_TIMEOUT_MS` | `65000` | Node HTTP 服务端 headersTimeout |
+| `OPENCODE_PROXY_SERVER_KEEPALIVE_TIMEOUT_MS` | `5000` | Node HTTP keep-alive 超时 |
+| `OPENCODE_PROXY_SERVER_SOCKET_TIMEOUT_MS` | `240000` | Socket 空闲超时，防止长连接卡死 |
+| `OPENCODE_PROXY_SHUTDOWN_GRACE_MS` | `10000` | 优雅关闭等待时长，超时后强制断开连接 |
 | `OPENCODE_SERVER_URL` | `http://127.0.0.1:10001` | OpenCode 后端地址 |
 | `OPENCODE_SERVER_PASSWORD` | - | OpenCode 后端密码 |
 | `OPENCODE_PATH` | `opencode` | OpenCode 可执行文件路径 |
