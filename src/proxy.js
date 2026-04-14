@@ -10,6 +10,7 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { createProxyError, normalizeProxyError } from './errors.js';
+import { backendState, buildBackendAuthHeaders, checkHealth, getBackendHealthStatus } from './backend-health.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -274,31 +275,6 @@ function resolveOpencodePath(requestedPath) {
     if (fromExtras) return { path: fromExtras, source: 'known-locations' };
 
     return { path: null, source: 'not-found' };
-}
-
-/**
- * Robust Health Check Helper
- */
-function buildBackendAuthHeaders(password = '') {
-    if (!password) return undefined;
-    const token = Buffer.from(`opencode:${password}`).toString('base64');
-    return { Authorization: `Basic ${token}` };
-}
-
-function checkHealth(serverUrl, password = '') {
-    return new Promise((resolve, reject) => {
-        const headers = buildBackendAuthHeaders(password);
-        const options = headers ? { headers } : undefined;
-        const req = http.get(`${serverUrl}/health`, options, (res) => {
-            if (res.statusCode === 200) resolve(true);
-            else reject(new Error(`Status ${res.statusCode}`));
-        });
-        req.on('error', (e) => reject(e));
-        req.setTimeout(2000, () => {
-            req.destroy();
-            reject(new Error('Timeout'));
-        });
-    });
 }
 
 /**
@@ -1942,42 +1918,6 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
     });
 
     return { app, client };
-}
-
-// Backend management state (per-instance)
-const backendState = new Map();
-
-function getBackendStateSnapshot(serverUrl) {
-    const state = backendState.get(serverUrl);
-    return {
-        configured: Boolean(serverUrl),
-        serverUrl,
-        isStarting: Boolean(state?.isStarting),
-        hasManagedProcess: Boolean(state?.process),
-        lastStartAttemptAt: state?.lastStartAttemptAt || null,
-        lastReadyAt: state?.lastReadyAt || null,
-        lastError: state?.lastError || null,
-        startupMode: state?.startupMode || null
-    };
-}
-
-async function getBackendHealthStatus(serverUrl, password = '') {
-    const snapshot = getBackendStateSnapshot(serverUrl);
-    try {
-        await checkHealth(serverUrl, password);
-        return {
-            ok: true,
-            reachable: true,
-            ...snapshot
-        };
-    } catch (error) {
-        return {
-            ok: false,
-            reachable: false,
-            error: error.message,
-            ...snapshot
-        };
-    }
 }
 
 /**
