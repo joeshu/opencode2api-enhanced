@@ -11,6 +11,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import { createProxyError, normalizeProxyError } from './errors.js';
 import { backendState, buildBackendAuthHeaders, checkHealth, getBackendHealthStatus } from './backend-health.js';
+import { createRequestRuntime } from './request-runtime.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -367,34 +368,9 @@ export function createApp(config) {
     let cachedModelsAt = 0;
     const ALLOW_PRIVATE_IMAGE_HOSTS = config.ALLOW_PRIVATE_IMAGE_HOSTS === true;
 
-    const MAX_CONCURRENT_REQUESTS = Number.isFinite(Number(config.MAX_CONCURRENT_REQUESTS)) && Number(config.MAX_CONCURRENT_REQUESTS) > 0
-        ? Number(config.MAX_CONCURRENT_REQUESTS)
-        : 8;
-    let activeRequests = 0;
-
-    const withRequestSlot = async (requestId, task) => {
-        if (activeRequests >= MAX_CONCURRENT_REQUESTS) {
-            throw createProxyError(`Too many concurrent requests: limit ${MAX_CONCURRENT_REQUESTS}`, 429, 'rate_limit_exceeded');
-        }
-        activeRequests += 1;
-        try {
-            return await task();
-        } finally {
-            activeRequests = Math.max(0, activeRequests - 1);
-        }
-    };
-
-    const createRequestLogger = (req, res) => {
-        const requestId = req.headers['x-request-id'] || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        if (!res.headersSent) {
-            res.setHeader('x-request-id', requestId);
-        }
-        const startedAt = Date.now();
-        const log = (event, data = {}) => {
-            logDebug(event, { requestId, elapsedMs: Date.now() - startedAt, ...data, activeRequests, maxConcurrentRequests: MAX_CONCURRENT_REQUESTS });
-        };
-        return { requestId, startedAt, log };
-    };
+    const runtime = createRequestRuntime(config.MAX_CONCURRENT_REQUESTS, (...args) => logDebug(...args));
+    const withRequestSlot = runtime.withRequestSlot;
+    const createRequestLogger = runtime.createRequestLogger;
 
     // Auth middleware
     app.use((req, res, next) => {
