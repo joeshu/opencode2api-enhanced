@@ -533,41 +533,20 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         const safeContent = stripFunctionCalls(content, true, DISABLE_TOOLS);
                         const safeReasoning = stripFunctionCalls(reasoning, true, DISABLE_TOOLS);
 
-                        const promptTokens = Math.ceil((fullPromptText || '').length / 4);
-                        const completionTokensCalc = Math.ceil((content || '').length / 4);
-                        const reasoningTokensCalc = Math.ceil((reasoning || '').length / 4);
-                        const totalTokens = promptTokens + completionTokensCalc + reasoningTokensCalc;
-
-                        let finalContent = safeContent;
-                        if (safeReasoning) {
-                            finalContent = `<think>\n${safeReasoning}\n</think>\n\n${safeContent}`;
-                        }
-
-                        res.json({
-                            id: `chatcmpl-${Date.now()}`,
-                            object: 'chat.completion',
-                            created: Math.floor(Date.now() / 1000),
+                        const built = buildChatCompletionResponse({
                             model: `${pID}/${mID}`,
-                            choices: [{
-                                index: 0,
-                                message: { role: 'assistant', content: finalContent },
-                                finish_reason: 'stop'
-                            }],
-                            usage: {
-                                prompt_tokens: promptTokens,
-                                completion_tokens: completionTokensCalc + reasoningTokensCalc,
-                                total_tokens: totalTokens,
-                                completion_tokens_details: {
-                                    reasoning_tokens: reasoningTokensCalc
-                                }
-                            }
+                            content: safeContent,
+                            reasoning: safeReasoning,
+                            fullPromptText
                         });
+
+                        res.json(built.body);
                         log('Request complete', {
                             sessionId,
                             phase: 'non-stream',
-                            promptTokens,
-                            completionTokens: completionTokensCalc + reasoningTokensCalc,
-                            totalTokens
+                            promptTokens: built.metrics.promptTokens,
+                            completionTokens: built.metrics.completionTokens,
+                            totalTokens: built.metrics.totalTokens
                         });
                     }
                 } catch (error) {
@@ -978,24 +957,14 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     });
                 }
 
-                const promptTokens = Math.ceil(fullPromptText.length / 4);
-                const completionTokens = Math.ceil(content.length / 4);
-                const reasoningTokens = Math.ceil(reasoning.length / 4);
-                const response = {
+                const response = buildResponsesApiResponse({
                     id: responseId,
-                    object: 'response',
-                    created: Math.floor(Date.now() / 1000),
                     model: `${pID}/${mID}`,
-                    reasoning: reasoning ? { effort: reasoningLevel, summary: reasoning.substring(0, 100) } : undefined,
-                    output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: content }] }],
-                    usage: {
-                        input_tokens: promptTokens,
-                        output_tokens: completionTokens + reasoningTokens,
-                        total_tokens: promptTokens + completionTokens + reasoningTokens,
-                        input_tokens_details: { cached_tokens: 0 },
-                        output_tokens_details: { reasoning_tokens: reasoningTokens }
-                    }
-                };
+                    content,
+                    reasoning,
+                    reasoningLevel,
+                    fullPromptText
+                });
                 emit({ type: 'response.completed', sequence_number: nextSeq(), response });
                 res.write('data: [DONE]\n\n');
                 try {
@@ -1015,36 +984,13 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 content = typeof data === 'string' ? data : data?.message || JSON.stringify(data);
             }
 
-            const promptTokens = Math.ceil(fullPromptText.length / 4);
-            const completionTokens = Math.ceil(content.length / 4);
-            const reasoningTokens = Math.ceil(reasoning.length / 4);
-
-            const response = {
-                id: `resp_${Date.now()}`,
-                object: 'response',
-                created: Math.floor(Date.now() / 1000),
+            const response = buildResponsesApiResponse({
                 model: `${pID}/${mID}`,
-                reasoning: reasoning ? { effort: reasoningLevel, summary: reasoning.substring(0, 100) } : undefined,
-                output: [
-                    {
-                        type: 'message',
-                        role: 'assistant',
-                        content: [
-                            {
-                                type: 'output_text',
-                                text: content
-                            }
-                        ]
-                    }
-                ],
-                usage: {
-                    input_tokens: promptTokens,
-                    output_tokens: completionTokens + reasoningTokens,
-                    total_tokens: promptTokens + completionTokens + reasoningTokens,
-                    input_tokens_details: { cached_tokens: 0 },
-                    output_tokens_details: { reasoning_tokens: reasoningTokens }
-                }
-            };
+                content,
+                reasoning,
+                reasoningLevel,
+                fullPromptText
+            });
 
             try {
                 await client.session.delete({ path: { id: sessionId } });
