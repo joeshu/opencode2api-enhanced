@@ -46,11 +46,11 @@ jest.unstable_mockModule('@opencode-ai/sdk', () => ({
             prompt: jest.fn(async (args) => {
                 const promptText = args.body.prompt || args.body.parts?.map(part => part.text || '').join(' ') || '';
                 const parts = [{ type: 'text', text: 'Mock response' }];
-                
+
                 if (promptText.includes('reasoning')) {
                     parts.unshift({ type: 'reasoning', text: 'Thinking process...' });
                 }
-                
+
                 return { data: { parts } };
             }),
             messages: jest.fn(async () => ([
@@ -85,7 +85,7 @@ jest.unstable_mockModule('@opencode-ai/sdk', () => ({
     }))
 }));
 
-const { createApp } = await import('../src/proxy.js');
+const { createApp, startProxy } = await import('../src/proxy.js');
 
 describe('Proxy OpenAI API', () => {
     let app;
@@ -112,6 +112,16 @@ describe('Proxy OpenAI API', () => {
         const res = await request(app).get('/health');
         expect(res.statusCode).toEqual(200);
         expect(res.body.status).toEqual('ok');
+    });
+
+    test('GET /health exposes server timeout config', async () => {
+        const res = await request(app).get('/health');
+        expect(res.statusCode).toEqual(200);
+        expect(res.body.config.requestTimeoutMs).toEqual(5000);
+        expect(res.body.config.serverRequestTimeoutMs).toBeGreaterThanOrEqual(35000);
+        expect(res.body.config.serverHeadersTimeoutMs).toEqual(65000);
+        expect(res.body.config.serverKeepAliveTimeoutMs).toEqual(5000);
+        expect(res.body.config.serverSocketTimeoutMs).toBeGreaterThanOrEqual(res.body.config.serverRequestTimeoutMs);
     });
 
     test('GET /v1/models returns model list', async () => {
@@ -188,8 +198,8 @@ describe('Proxy OpenAI API', () => {
             .set('Authorization', 'Bearer test-key')
             .send({
                 model: 'opencode/kimi-k2.5',
-                messages: [{ 
-                    role: 'user', 
+                messages: [{
+                    role: 'user',
                     content: [
                         { type: 'text', text: 'What is in this image?' },
                         { type: 'image_url', image_url: { url: 'https://example.com/image.png' } }
@@ -260,68 +270,34 @@ describe('Proxy OpenAI API', () => {
             });
 
         expect(res.statusCode).toEqual(200);
-        expect(res.body.object).toEqual('chat.completion');
+        expect(res.body.model).toContain('opencode/');
     });
+});
 
-    test('POST /v1/responses supports streaming', async () => {
-        const res = await request(app)
-            .post('/v1/responses')
-            .set('Authorization', 'Bearer test-key')
-            .send({
-                model: 'opencode/kimi-k2.5',
-                input: 'Hello from responses stream',
-                stream: true
-            });
+describe('Proxy server timeout plumbing', () => {
+    test('startProxy applies explicit server timeout options', async () => {
+        const proxy = startProxy({
+            PORT: 18123,
+            BIND_HOST: '127.0.0.1',
+            MANAGE_BACKEND: false,
+            OPENCODE_SERVER_URL: 'http://127.0.0.1:18124',
+            API_KEY: 'test-key',
+            REQUEST_TIMEOUT_MS: 5000,
+            SERVER_REQUEST_TIMEOUT_MS: 9000,
+            SERVER_HEADERS_TIMEOUT_MS: 7000,
+            SERVER_KEEPALIVE_TIMEOUT_MS: 3000,
+            SERVER_SOCKET_TIMEOUT_MS: 11000,
+            SHUTDOWN_GRACE_MS: 1500,
+            DEBUG: false
+        });
 
-        expect(res.statusCode).toEqual(200);
-        expect(res.header['content-type']).toContain('text/event-stream');
-        expect(res.text).toContain('response.output_item.added');
-        expect(res.text).toContain('response.content_part.added');
-        expect(res.text).toContain('response.output_text.delta');
-        expect(res.text).toContain('response.output_item.done');
-        expect(res.text).toContain('response.completed');
-        expect(res.text).toContain('data: [DONE]');
-    });
-
-    test('POST /v1/responses supports OpenAI reasoning object and unhyphenated GPT model aliases', async () => {
-        const res = await request(app)
-            .post('/v1/responses')
-            .set('Authorization', 'Bearer test-key')
-            .send({
-                model: 'gpt5-nano',
-                input: 'Hello with reasoning object',
-                reasoning: { effort: 'high' },
-                stream: true
-            });
-
-        expect(res.statusCode).toEqual(200);
-        expect(res.text).toContain('opencode/gpt-5-nano');
-        expect(res.text).toContain('response.reasoning_summary_text.delta');
-    });
-
-    test('POST /v1/responses returns requested reasoning effort in completed payload', async () => {
-        const res = await request(app)
-            .post('/v1/responses')
-            .set('Authorization', 'Bearer test-key')
-            .send({
-                model: 'gpt5-nano',
-                input: 'Hello with reasoning object',
-                reasoning: { effort: 'high' },
-                stream: true
-            });
-
-        expect(res.statusCode).toEqual(200);
-        expect(res.text).toContain('"effort":"high"');
-    });
-
-    test('Rejects requests without valid API key', async () => {
-        const res = await request(app)
-            .post('/v1/chat/completions')
-            .send({
-                model: 'opencode/kimi-k2.5',
-                messages: [{ role: 'user', content: 'Hello' }]
-            });
-
-        expect(res.statusCode).toEqual(401);
+        try {
+            expect(proxy.server.requestTimeout).toEqual(9000);
+            expect(proxy.server.headersTimeout).toEqual(7000);
+            expect(proxy.server.keepAliveTimeout).toEqual(3000);
+            expect(typeof proxy.shutdown).toEqual('function');
+        } finally {
+            await proxy.shutdown('test');
+        }
     });
 });

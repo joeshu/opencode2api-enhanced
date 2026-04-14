@@ -138,6 +138,11 @@ const STARTUP_WAIT_INTERVAL_MS = 2000;
 const STARTING_WAIT_ITERATIONS = 120;
 const STARTING_WAIT_INTERVAL_MS = 1000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 300000;
+const DEFAULT_SERVER_REQUEST_TIMEOUT_MS = DEFAULT_REQUEST_TIMEOUT_MS + 30000;
+const DEFAULT_SERVER_HEADERS_TIMEOUT_MS = 65000;
+const DEFAULT_SERVER_KEEPALIVE_TIMEOUT_MS = 5000;
+const DEFAULT_SERVER_SOCKET_TIMEOUT_MS = DEFAULT_REQUEST_TIMEOUT_MS + 60000;
+const DEFAULT_SHUTDOWN_GRACE_MS = 10000;
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_EVENT_FIRST_DELTA_TIMEOUT_MS = 120000;
 const DEFAULT_EVENT_IDLE_TIMEOUT_MS = 20000;
@@ -370,6 +375,18 @@ export function createApp(config) {
     } = config;
 
     const app = express();
+    const SERVER_REQUEST_TIMEOUT_MS = Number.isFinite(Number(config.SERVER_REQUEST_TIMEOUT_MS)) && Number(config.SERVER_REQUEST_TIMEOUT_MS) > 0
+        ? Number(config.SERVER_REQUEST_TIMEOUT_MS)
+        : Math.max(REQUEST_TIMEOUT_MS + 30000, DEFAULT_SERVER_REQUEST_TIMEOUT_MS);
+    const SERVER_HEADERS_TIMEOUT_MS = Number.isFinite(Number(config.SERVER_HEADERS_TIMEOUT_MS)) && Number(config.SERVER_HEADERS_TIMEOUT_MS) > 0
+        ? Number(config.SERVER_HEADERS_TIMEOUT_MS)
+        : DEFAULT_SERVER_HEADERS_TIMEOUT_MS;
+    const SERVER_KEEPALIVE_TIMEOUT_MS = Number.isFinite(Number(config.SERVER_KEEPALIVE_TIMEOUT_MS)) && Number(config.SERVER_KEEPALIVE_TIMEOUT_MS) > 0
+        ? Number(config.SERVER_KEEPALIVE_TIMEOUT_MS)
+        : DEFAULT_SERVER_KEEPALIVE_TIMEOUT_MS;
+    const SERVER_SOCKET_TIMEOUT_MS = Number.isFinite(Number(config.SERVER_SOCKET_TIMEOUT_MS)) && Number(config.SERVER_SOCKET_TIMEOUT_MS) > 0
+        ? Number(config.SERVER_SOCKET_TIMEOUT_MS)
+        : Math.max(SERVER_REQUEST_TIMEOUT_MS + 30000, DEFAULT_SERVER_SOCKET_TIMEOUT_MS);
     app.use(cors({
         origin: '*',
         methods: ['GET', 'POST', 'OPTIONS'],
@@ -1479,7 +1496,11 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 disableTools: DISABLE_TOOLS,
                 promptMode: PROMPT_MODE,
                 autoCleanupConversations: AUTO_CLEANUP_CONVERSATIONS,
-                requestTimeoutMs: REQUEST_TIMEOUT_MS
+                requestTimeoutMs: REQUEST_TIMEOUT_MS,
+                serverRequestTimeoutMs: SERVER_REQUEST_TIMEOUT_MS,
+                serverHeadersTimeoutMs: SERVER_HEADERS_TIMEOUT_MS,
+                serverKeepAliveTimeoutMs: SERVER_KEEPALIVE_TIMEOUT_MS,
+                serverSocketTimeoutMs: SERVER_SOCKET_TIMEOUT_MS
             }
         });
     });
@@ -2282,19 +2303,81 @@ export function startProxy(options) {
         }
     });
 
+    server.requestTimeout = config.SERVER_REQUEST_TIMEOUT_MS;
+    server.headersTimeout = config.SERVER_HEADERS_TIMEOUT_MS;
+    server.keepAliveTimeout = config.SERVER_KEEPALIVE_TIMEOUT_MS;
+    server.setTimeout(config.SERVER_SOCKET_TIMEOUT_MS, (socket) => {
+        try {
+            socket.end('HTTP/1.1 408 Request Timeout\r\nConnection: close\r\n\r\n');
+        } catch (e) {
+            socket.destroy();
+        }
+    });
+    server.on('clientError', (err, socket) => {
+        if (!socket || socket.destroyed) return;
+        const code = err?.code || 'client_error';
+        const body = JSON.stringify({
+            error: {
+                message: code === 'HPE_HEADER_OVERFLOW' ? 'Request headers too large' : 'Invalid HTTP request',
+                type: code === 'HPE_HEADER_OVERFLOW' ? 'headers_overflow_error' : 'bad_request_error'
+            }
+        });
+        try {
+            socket.end(
+                `HTTP/1.1 ${code === 'HPE_HEADER_OVERFLOW' ? 431 : 400} ${code === 'HPE_HEADER_OVERFLOW' ? 'Request Header Fields Too Large' : 'Bad Request'}\r\n` +
+                'Content-Type: application/json\r\n' +
+                `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+                'Connection: close\r\n\r\n' +
+                body
+            );
+        } catch (e) {
+            socket.destroy();
+        }
+    });
+
+    const killBackend = () => {
+        const state = backendState.get(config.OPENCODE_SERVER_URL);
+        if (state && state.process) {
+            state.process.kill();
+        }
+        if (state && state.jailRoot && process.platform !== 'win32') {
+            try {
+                fs.rmSync(state.jailRoot, { recursive: true, force: true });
+            } catch (e) { }
+        }
+    };
+
+    const shutdown = (reason = 'shutdown') => new Promise((resolve) => {
+        const graceMs = Number.isFinite(Number(config.SHUTDOWN_GRACE_MS)) && Number(config.SHUTDOWN_GRACE_MS) > 0
+            ? Number(config.SHUTDOWN_GRACE_MS)
+            : DEFAULT_SHUTDOWN_GRACE_MS;
+        let settled = false;
+        const finalize = () => {
+            if (settled) return;
+            settled = true;
+            killBackend();
+            resolve();
+        };
+        const forceTimer = setTimeout(() => {
+            console.warn(`[Shutdown] Grace period exceeded after ${graceMs}ms (${reason}), force closing active connections`);
+            try {
+                server.closeAllConnections?.();
+            } catch (e) { }
+            try {
+                server.closeIdleConnections?.();
+            } catch (e) { }
+            finalize();
+        }, graceMs);
+        if (forceTimer.unref) forceTimer.unref();
+        server.close(() => {
+            clearTimeout(forceTimer);
+            finalize();
+        });
+    });
+
     return {
         server,
-        killBackend: () => {
-            const state = backendState.get(config.OPENCODE_SERVER_URL);
-            if (state && state.process) {
-                state.process.kill();
-            }
-            // Cleanup temp dir (only on non-Windows where we use jail)
-            if (state && state.jailRoot && process.platform !== 'win32') {
-                try {
-                    fs.rmSync(state.jailRoot, { recursive: true, force: true });
-                } catch (e) { }
-            }
-        }
+        killBackend,
+        shutdown
     };
 }

@@ -60,7 +60,11 @@ const finalConfig = {
     DISABLE_TOOLS: parseBool(process.env.OPENCODE_DISABLE_TOOLS, parseBool(fileConfig.DISABLE_TOOLS, defaultConfig.DISABLE_TOOLS)),
     USE_ISOLATED_HOME: parseBool(process.env.OPENCODE_USE_ISOLATED_HOME, parseBool(fileConfig.USE_ISOLATED_HOME, false)),
     REQUEST_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_REQUEST_TIMEOUT_MS) || fileConfig.REQUEST_TIMEOUT_MS || 180000,
-    DEBUG: parseBool(process.env.OPENCODE_PROXY_DEBUG, parseBool(fileConfig.DEBUG, false)),
+    SERVER_REQUEST_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_SERVER_REQUEST_TIMEOUT_MS) || fileConfig.SERVER_REQUEST_TIMEOUT_MS || null,
+    SERVER_HEADERS_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_SERVER_HEADERS_TIMEOUT_MS) || fileConfig.SERVER_HEADERS_TIMEOUT_MS || null,
+    SERVER_KEEPALIVE_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_SERVER_KEEPALIVE_TIMEOUT_MS) || fileConfig.SERVER_KEEPALIVE_TIMEOUT_MS || null,
+    SERVER_SOCKET_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_SERVER_SOCKET_TIMEOUT_MS) || fileConfig.SERVER_SOCKET_TIMEOUT_MS || null,
+    SHUTDOWN_GRACE_MS: parseInt(process.env.OPENCODE_PROXY_SHUTDOWN_GRACE_MS) || fileConfig.SHUTDOWN_GRACE_MS || 10000,
     ZEN_API_KEY: process.env.OPENCODE_ZEN_API_KEY || fileConfig.ZEN_API_KEY || '',
     MODEL_CACHE_MS: parseInt(process.env.OPENCODE_PROXY_MODEL_CACHE_MS) || fileConfig.MODEL_CACHE_MS || 60000,
     MAX_IMAGE_BYTES: parseInt(process.env.OPENCODE_PROXY_MAX_IMAGE_BYTES) || fileConfig.MAX_IMAGE_BYTES || 10485760,
@@ -107,6 +111,11 @@ console.log(`  - Max Concurrent Requests: ${finalConfig.MAX_CONCURRENT_REQUESTS}
 console.log(`  - Disable Tools: ${finalConfig.DISABLE_TOOLS ? 'Yes' : 'No'}`);
 console.log(`  - Use Isolated Home: ${finalConfig.USE_ISOLATED_HOME ? 'Yes' : 'No'}`);
 console.log(`  - Request Timeout: ${finalConfig.REQUEST_TIMEOUT_MS}ms`);
+console.log(`  - Server Request Timeout: ${finalConfig.SERVER_REQUEST_TIMEOUT_MS ?? 'auto'}ms`);
+console.log(`  - Server Headers Timeout: ${finalConfig.SERVER_HEADERS_TIMEOUT_MS ?? 'auto'}ms`);
+console.log(`  - Server Keep-Alive Timeout: ${finalConfig.SERVER_KEEPALIVE_TIMEOUT_MS ?? 'auto'}ms`);
+console.log(`  - Server Socket Timeout: ${finalConfig.SERVER_SOCKET_TIMEOUT_MS ?? 'auto'}ms`);
+console.log(`  - Shutdown Grace: ${finalConfig.SHUTDOWN_GRACE_MS}ms`);
 console.log(`  - Prompt Mode: ${finalConfig.PROMPT_MODE}`);
 console.log(`  - Omit System Prompt: ${finalConfig.OMIT_SYSTEM_PROMPT ? 'Yes' : 'No'}`);
 console.log(`  - Auto Cleanup Conversations: ${finalConfig.AUTO_CLEANUP_CONVERSATIONS ? 'Yes' : 'No'}`);
@@ -119,22 +128,30 @@ try {
     const proxy = startProxy(finalConfig);
     
     // Handle graceful shutdown
-    process.on('SIGINT', () => {
+    process.on('SIGINT', async () => {
         console.log('\n[Shutdown] Received SIGINT, shutting down gracefully...');
-        proxy.killBackend();
-        proxy.server.close(() => {
+        try {
+            await proxy.shutdown('SIGINT');
             console.log('[Shutdown] Server closed');
             process.exit(0);
-        });
+        } catch (error) {
+            console.error('[Shutdown] Graceful shutdown failed:', error.message);
+            proxy.killBackend();
+            process.exit(1);
+        }
     });
     
-    process.on('SIGTERM', () => {
+    process.on('SIGTERM', async () => {
         console.log('\n[Shutdown] Received SIGTERM, shutting down gracefully...');
-        proxy.killBackend();
-        proxy.server.close(() => {
+        try {
+            await proxy.shutdown('SIGTERM');
             console.log('[Shutdown] Server closed');
             process.exit(0);
-        });
+        } catch (error) {
+            console.error('[Shutdown] Graceful shutdown failed:', error.message);
+            proxy.killBackend();
+            process.exit(1);
+        }
     });
 } catch (error) {
     console.error('[Fatal] Failed to start proxy:', error.message);
