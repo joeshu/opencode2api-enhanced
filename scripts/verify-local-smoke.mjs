@@ -1,5 +1,5 @@
 import http from 'http';
-import { startProxy } from './src/proxy.js';
+import { startProxy } from '../src/proxy.js';
 
 const proxyPort = 18088;
 const backendPort = 18089;
