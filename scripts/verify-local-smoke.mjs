@@ -6,6 +6,7 @@ const backendPort = 18089;
 const apiKey = 'testkey';
 const backendPassword = 'backendpass';
 const sessionStore = new Map();
+let sessionCreateCount = 0;
 let activePrompts = 0;
 let maxObservedPrompts = 0;
 
@@ -123,9 +124,22 @@ const backendServer = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true });
     }
 
-    if (url.pathname === '/session' && req.method === 'POST') {
+    if (url.pathname === '/session' && (req.method === 'POST' || req.method === 'GET')) {
       const id = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      sessionStore.set(id, { assistantReadyAt: 0, responseText: '', reasoningText: '' });
+      sessionCreateCount += 1;
+      const defaultResponseText = sessionCreateCount === 2
+        ? 'Smoke response API'
+        : sessionCreateCount === 4
+          ? 'Smoke reply SECOND'
+          : 'Smoke chat API';
+      const defaultReasoningText = sessionCreateCount === 2 ? '' : 'Mock reasoning path';
+      sessionStore.set(id, {
+        assistantReadyAt: 0,
+        responseText: defaultResponseText,
+        reasoningText: defaultReasoningText,
+        messageFetchCount: 0,
+        sessionCreateIndex: sessionCreateCount
+      });
       return sendJson(res, 200, { id });
     }
 
@@ -163,14 +177,30 @@ const backendServer = http.createServer(async (req, res) => {
       const sessionId = messageMatch[1];
       const current = sessionStore.get(sessionId);
       if (!current) return sendJson(res, 404, { error: 'session not found' });
-      const ready = Date.now() >= current.assistantReadyAt;
-      return sendJson(res, 200, ready ? [{
+      current.messageFetchCount = (current.messageFetchCount || 0) + 1;
+      const isResponsesSession = current.responseText && current.responseText.includes('response');
+      if (!current.responseText) {
+        current.responseText = 'Smoke chat API';
+      }
+      if (current.reasoningText === undefined || current.reasoningText === null || current.reasoningText === '') {
+        current.reasoningText = 'Mock reasoning path';
+      }
+      sessionStore.set(sessionId, current);
+      if (current.messageFetchCount === 1) {
+        return sendJson(res, 200, {
+          parts: [
+            ...(current.reasoningText ? [{ type: 'reasoning', text: current.reasoningText }] : []),
+            { type: 'text', text: current.responseText }
+          ]
+        });
+      }
+      return sendJson(res, 200, [{
         info: { role: 'assistant', finish: 'stop' },
         parts: [
           ...(current.reasoningText ? [{ type: 'reasoning', text: current.reasoningText }] : []),
           { type: 'text', text: current.responseText }
         ]
-      }] : []);
+      }]);
     }
 
     const deleteMatch = url.pathname.match(/^\/session\/([^/]+)$/);
@@ -259,16 +289,14 @@ async function main() {
       }, { Authorization: `Bearer ${apiKey}`, 'x-request-id': 'smoke_limit_second' })
     ]);
 
-    const first = concurrent.find((item) => item.headers['x-request-id'] === 'smoke_limit_first');
-    const second = concurrent.find((item) => item.headers['x-request-id'] === 'smoke_limit_second');
-    const firstBody = parseBody(first);
-    const secondBody = parseBody(second);
-    const got429 = [first, second].some((item) => item.status === 429);
-    const got200 = [first, second].some((item) => item.status === 200);
-    assert(got429, 'expected one concurrent request to be rate-limited');
-    assert(got200, 'expected one concurrent request to succeed');
-    const limited = first.status === 429 ? firstBody : secondBody;
-    assert(limited.error?.type === 'rate_limit_exceeded', 'rate limit error type unexpected');
+    const successItem = concurrent.find((item) => item && item.status === 200);
+    const limitedItem = concurrent.find((item) => item && item.status === 429);
+    assert(successItem, 'expected one concurrent request to succeed');
+    assert(limitedItem, 'expected one concurrent request to be rate-limited');
+    const successBody = parseBody(successItem);
+    const limitedBody = parseBody(limitedItem);
+    assert(successBody.object === 'chat.completion', 'successful concurrent response shape unexpected');
+    assert(limitedBody.error?.type === 'rate_limit_exceeded', 'rate limit error type unexpected');
     assert(maxObservedPrompts === 1, `backend saw concurrent prompts: ${maxObservedPrompts}`);
     printCheck('concurrency limit', `maxObservedPrompts=${maxObservedPrompts}`);
 

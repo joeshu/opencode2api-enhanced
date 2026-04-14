@@ -547,11 +547,14 @@ export function createApp(config) {
 
     // Models endpoint
     app.get('/v1/models', async (req, res) => {
+        const { requestId, log } = createRequestLogger(req, res);
         try {
             const models = await getModelsList();
+            log('Models fetched', { count: models.length });
             res.json({ object: 'list', data: models });
         } catch (error) {
             console.error('[Proxy] Model Fetch Error:', error.message);
+            log('Model fetch fallback', { error: error.message });
             res.json({ object: 'list', data: [{ id: 'opencode/kimi-k2.5-free', object: 'model' }] });
         }
     });
