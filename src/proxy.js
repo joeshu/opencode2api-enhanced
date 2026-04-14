@@ -23,8 +23,10 @@ import {
 import { createModelsRuntime } from './models.js';
 import { DEFAULT_MAX_IMAGE_BYTES, getImageDataUri } from './image.js';
 import { buildSystemPrompt, normalizeReasoningEffort, stripFunctionCalls, createToolCallFilter } from './prompt-utils.js';
+import { registerProcessCleanup } from './cleanup.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+registerProcessCleanup();
 
 const STARTUP_WAIT_ITERATIONS = 60;
 const STARTUP_WAIT_INTERVAL_MS = 2000;
@@ -180,42 +182,6 @@ function resolveOpencodePath(requestedPath) {
 
     return { path: null, source: 'not-found' };
 }
-
-/**
- * Cleanup temporary directories
- */
-function cleanupTempDirs() {
-    // Only cleanup jail directories on non-Windows platforms
-    // On Windows, we don't use isolated jail to avoid path issues
-    if (process.platform === 'win32') return;
-
-    const jailRoot = path.join(os.tmpdir(), 'opencode-proxy-jail');
-    try {
-        if (fs.existsSync(jailRoot)) {
-            fs.rmSync(jailRoot, { recursive: true, force: true });
-        }
-    } catch (e) {
-        console.error('[Cleanup] Failed to remove temp dirs:', e.message);
-    }
-}
-
-// Register cleanup on exit
-process.on('exit', cleanupTempDirs);
-
-// Handle signals - Unix-like systems
-if (process.platform !== 'win32') {
-    process.on('SIGINT', () => {
-        console.log('\n[Shutdown] Received SIGINT, cleaning up...');
-        cleanupTempDirs();
-        process.exit(0);
-    });
-    process.on('SIGTERM', () => {
-        console.log('\n[Shutdown] Received SIGTERM, cleaning up...');
-        cleanupTempDirs();
-        process.exit(0);
-    });
-}
-// Note: Windows signal handling is limited, cleanup is handled via process.on('exit')
 
 /**
  * Create Express app with proper configuration
