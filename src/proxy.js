@@ -22,6 +22,7 @@ import {
     resolveServerTimeouts,
     resolveShutdownGraceMs
 } from './timeouts.js';
+import { createModelsRuntime } from './models.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -354,16 +355,13 @@ export function createApp(config) {
 
     const clientHeaders = buildBackendAuthHeaders(OPENCODE_SERVER_PASSWORD);
     const client = createOpencodeClient({ baseUrl: OPENCODE_SERVER_URL, headers: clientHeaders });
+    const modelsRuntime = createModelsRuntime(client, config.MODEL_CACHE_MS);
+    const getModelsList = modelsRuntime.getModelsList;
+    const resolveRequestedModel = modelsRuntime.resolveRequestedModel;
 
-    const MODEL_CACHE_MS = Number.isFinite(Number(config.MODEL_CACHE_MS)) && Number(config.MODEL_CACHE_MS) > 0
-        ? Number(config.MODEL_CACHE_MS)
-        : 60 * 1000;
     const MAX_IMAGE_BYTES = Number.isFinite(Number(config.MAX_IMAGE_BYTES)) && Number(config.MAX_IMAGE_BYTES) > 0
         ? Number(config.MAX_IMAGE_BYTES)
         : DEFAULT_MAX_IMAGE_BYTES;
-    let cachedProvidersList = null;
-    let cachedModelsList = null;
-    let cachedModelsAt = 0;
     const ALLOW_PRIVATE_IMAGE_HOSTS = config.ALLOW_PRIVATE_IMAGE_HOSTS === true;
 
     const runtime = createRequestRuntime(config.MAX_CONCURRENT_REQUESTS, (...args) => logDebug(...args));
@@ -387,95 +385,6 @@ export function createApp(config) {
         }
         next();
     });
-
-    const getProvidersList = async (forceRefresh = false) => {
-        const now = Date.now();
-        if (!forceRefresh && cachedProvidersList && cachedModelsAt && now - cachedModelsAt < MODEL_CACHE_MS) {
-            return cachedProvidersList;
-        }
-        const providersRes = await client.config.providers();
-        const providersRaw = providersRes.data?.providers || [];
-        const providersList = Array.isArray(providersRaw)
-            ? providersRaw
-            : Object.entries(providersRaw).map(([id, info]) => ({ ...info, id }));
-        cachedProvidersList = providersList;
-        cachedModelsList = null;
-        cachedModelsAt = now;
-        return providersList;
-    };
-
-    const buildModelsList = (providersList) => {
-        const models = [];
-        providersList.forEach((p) => {
-            if (p.models) {
-                Object.entries(p.models).forEach(([mId, mData]) => {
-                    models.push({
-                        id: `${p.id}/${mId}`,
-                        name: typeof mData === 'object' ? (mData.name || mData.label || mId) : mId,
-                        object: 'model',
-                        created: (mData && mData.release_date)
-                            ? Math.floor(new Date(mData.release_date).getTime() / 1000)
-                            : 1704067200,
-                        owned_by: p.id
-                    });
-                });
-            }
-        });
-        return models;
-    };
-
-    const getModelsList = async (forceRefresh = false) => {
-        const now = Date.now();
-        if (!forceRefresh && cachedModelsList && cachedModelsAt && now - cachedModelsAt < MODEL_CACHE_MS) {
-            return cachedModelsList;
-        }
-        const models = buildModelsList(await getProvidersList(forceRefresh));
-        cachedModelsList = models;
-        cachedModelsAt = now;
-        return models;
-    };
-
-    const normalizeModelID = (modelID) => {
-        if (!modelID || typeof modelID !== 'string') return modelID;
-        return modelID
-            .replace(/^gpt(\d)/i, 'gpt-$1')
-            .replace(/^o(\d)/i, 'o$1');
-    };
-
-    const resolveRequestedModel = async (requestedModel) => {
-        const models = await getModelsList();
-        const fallbackModel = models[0]?.id || 'opencode/kimi-k2.5-free';
-        let [providerID, modelID] = (requestedModel || fallbackModel).split('/');
-        if (!modelID) {
-            modelID = providerID;
-            providerID = 'opencode';
-        }
-        const originalModelID = modelID;
-        const normalizedModelID = normalizeModelID(modelID);
-        const candidateModelIDs = [...new Set([modelID, normalizedModelID].filter(Boolean))];
-        const exact = models.find((m) => candidateModelIDs.some((candidate) => m.id === `${providerID}/${candidate}`));
-        if (exact) {
-            const [, resolvedModelID] = exact.id.split('/');
-            return {
-                providerID,
-                modelID: resolvedModelID,
-                models,
-                resolved: exact.id,
-                ...(resolvedModelID !== originalModelID && { aliasFrom: `${providerID}/${originalModelID}` })
-            };
-        }
-        const sameProvider = models.filter((m) => m.owned_by === providerID);
-        const suffixMatch = sameProvider.find((m) => candidateModelIDs.some((candidate) => m.id.endsWith(`/${candidate}-free`) || m.id.endsWith(`/${candidate}`)));
-        if (suffixMatch) {
-            const [, resolvedModelID] = suffixMatch.id.split('/');
-            return { providerID, modelID: resolvedModelID, models, resolved: suffixMatch.id, aliasFrom: `${providerID}/${originalModelID}` };
-        }
-        const error = new Error(`Model not found: ${providerID}/${modelID}`);
-        error.statusCode = 400;
-        error.code = 'model_not_found';
-        error.availableModels = models.map((m) => m.id);
-        throw error;
-    };
 
     // Models endpoint
     app.get('/v1/models', async (req, res) => {
