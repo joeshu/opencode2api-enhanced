@@ -170,7 +170,6 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 let insideReasoning = false;
                 let keepaliveInterval = null;
                 const { requestId, log } = createRequestLogger(req, res);
-            const latency = createLatencyTracker(log, { route: '/v1/responses', stream: Boolean(stream) });
                 const latency = createLatencyTracker(log, { route: '/v1/chat/completions', stream: Boolean(stream) });
 
                 try {
