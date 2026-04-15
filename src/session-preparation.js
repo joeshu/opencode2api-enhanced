@@ -1,3 +1,5 @@
+import { shouldUpdateActiveModel, markActiveModel } from './active-model-cache.js';
+
 export async function ensureModelSession(config, deps) {
     const {
         client,
@@ -33,14 +35,23 @@ export async function ensureModelSession(config, deps) {
         STARTING_WAIT_INTERVAL_MS
     });
 
-    try {
-        await client.config.update({
-            body: {
-                activeModel: { providerID, modelID }
-            }
-        });
-    } catch (confError) {
-        logDebug('Failed to set active model:', confError.message);
+    const cacheKey = config.OPENCODE_SERVER_URL;
+    const needActiveModelUpdate = shouldUpdateActiveModel(cacheKey, providerID, modelID);
+
+    if (needActiveModelUpdate) {
+        try {
+            await client.config.update({
+                body: {
+                    activeModel: { providerID, modelID }
+                }
+            });
+            markActiveModel(cacheKey, providerID, modelID);
+            logDebug('Active model update applied', { providerID, modelID });
+        } catch (confError) {
+            logDebug('Failed to set active model:', confError.message);
+        }
+    } else {
+        logDebug('Active model update skipped', { providerID, modelID });
     }
 
     const sessionRes = await client.session.create();
