@@ -11,7 +11,7 @@
 ### 1️⃣ 克隆项目
 
 ```bash
-git clone https://github.com/TiaraBasori/opencode2api.git
+git clone https://github.com/joeshu/opencode2api-enhanced.git
 cd opencode2api
 ```
 

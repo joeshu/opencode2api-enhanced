@@ -30,7 +30,7 @@
 
 | 步骤 | 命令 |
 |:-----|:-----|
-| 1. 克隆项目 | `git clone https://github.com/TiaraBasori/opencode2api.git` |
+| 1. 克隆项目 | `git clone https://github.com/joeshu/opencode2api-enhanced.git` |
 | 2. 进入目录 | `cd opencode2api` |
 | 3. 复制配置 | `cp .env.example .env` |
 | 4. 启动服务 | `docker compose up -d` |
@@ -39,7 +39,7 @@
 
 | 步骤 | 命令 |
 |:-----|:-----|
-| 1. 克隆项目 | `git clone https://github.com/TiaraBasori/opencode2api.git` |
+| 1. 克隆项目 | `git clone https://github.com/joeshu/opencode2api-enhanced.git` |
 | 2. 进入目录 | `cd opencode2api` |
 | 3. 安装依赖 | `npm install` |
 | 4. 复制配置 | `cp config.json.example config.json` |

@@ -33,22 +33,23 @@
 ### Docker 部署 (推荐)
 
 ```bash
-# 直接使用已发布镜像
-# docker pull ghcr.io/joeshu/opencode2api-enhanced:latest
-
 # 1. 克隆并配置
-git clone https://github.com/joeshu/opencode2api.git
-cd opencode2api
+# 也可以直接使用已发布镜像：ghcr.io/joeshu/opencode2api-enhanced:latest
+git clone https://github.com/joeshu/opencode2api-enhanced.git
+cd opencode2api-enhanced
 cp .env.example .env
 
-# 2. 编辑 .env 设置你的配置
+# 2. 编辑 .env
 # 必填: API_KEY, OPENCODE_SERVER_PASSWORD
+# 推荐: OPENCODE_PROFILE=stable
 
 # 3. 启动
-docker compose up -d
+# 如需强制应用新的 .env，建议使用 --force-recreate
+docker compose up -d --force-recreate
 
 # 4. 测试
-curl http://127.0.0.1:10000/health
+curl http://127.0.0.1:10000/health/live
+curl http://127.0.0.1:10000/health/ready
 ```
 
 ### Node.js (本地开发)
@@ -63,6 +64,11 @@ git clone https://github.com/joeshu/opencode2api-enhanced.git
 cd opencode2api-enhanced
 npm install
 cp config.json.example config.json
+
+# 3. 编辑 config.json 或使用环境变量
+# 至少确认 API_KEY、OPENCODE_SERVER_URL / OPENCODE_SERVER_PASSWORD 等配置
+
+# 4. 启动
 npm start
 ```
 
@@ -72,6 +78,20 @@ npm start
 # 不依赖 Jest，使用内置 mock backend 验证主链路
 npm run verify:smoke
 ```
+
+### 模式切换
+
+在 `.env` 中通过下面的变量选择模式：
+
+```env
+OPENCODE_PROFILE=stable
+# 或
+OPENCODE_PROFILE=tools-stable
+```
+
+- `stable`：稳定模式，默认禁工具，更适合手机日常使用
+- `tools-stable`：稳定工具模式，允许工具，但会降低并发并提高超时阈值
+- 如果你显式设置了 `OPENCODE_DISABLE_TOOLS`、并发、超时等变量，则显式值优先
 
 ---
 
@@ -134,6 +154,7 @@ curl http://127.0.0.1:10000/health
 
 | 环境变量 | 默认值 | 说明 |
 |:--------|:-------|:------|
+| `OPENCODE_PROFILE` | `stable` | 运行模式：`stable`（稳定、禁工具）或 `tools-stable`（稳定工具模式） |
 | `PORT` / `OPENCODE_PROXY_PORT` | `10000` | 代理服务端口 |
 | `OPENCODE_SERVER_PORT` | `10001` | OpenCode 后端服务端口 |
 | `API_KEY` | - | Bearer Token 认证密钥 |
@@ -164,17 +185,33 @@ curl http://127.0.0.1:10000/health
 
 ### 推荐生产配置
 
+#### 稳定模式（默认推荐）
+
 ```env
 API_KEY=your-secret-key
 OPENCODE_SERVER_PASSWORD=your-password
-OPENCODE_DISABLE_TOOLS=true
+OPENCODE_PROFILE=stable
 OPENCODE_PROXY_PROMPT_MODE=plugin-inject
 OPENCODE_PROXY_OMIT_SYSTEM_PROMPT=true
 OPENCODE_PROXY_AUTO_CLEANUP_CONVERSATIONS=true
 OPENCODE_PROXY_MAX_IMAGE_BYTES=10485760
 OPENCODE_PROXY_ALLOW_PRIVATE_IMAGE_HOSTS=false
-OPENCODE_PROXY_MAX_CONCURRENT_REQUESTS=8
 ```
+
+#### 稳定工具模式（移动端也想用工具时）
+
+```env
+API_KEY=your-secret-key
+OPENCODE_SERVER_PASSWORD=your-password
+OPENCODE_PROFILE=tools-stable
+OPENCODE_PROXY_PROMPT_MODE=plugin-inject
+OPENCODE_PROXY_OMIT_SYSTEM_PROMPT=true
+OPENCODE_PROXY_AUTO_CLEANUP_CONVERSATIONS=true
+OPENCODE_PROXY_MAX_IMAGE_BYTES=10485760
+OPENCODE_PROXY_ALLOW_PRIVATE_IMAGE_HOSTS=false
+```
+
+> 说明：`OPENCODE_PROFILE` 会提供一组默认参数；若你显式设置了 `OPENCODE_DISABLE_TOOLS`、`OPENCODE_PROXY_MAX_CONCURRENT_REQUESTS`、超时等变量，则显式值优先。
 
 ---
 
