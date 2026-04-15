@@ -66,6 +66,7 @@ export function createApp(config) {
         OPENCODE_SERVER_PASSWORD,
         REQUEST_TIMEOUT_MS,
         DEBUG,
+        TRACE,
         DISABLE_TOOLS,
         PROMPT_MODE,
         OMIT_SYSTEM_PROMPT,
@@ -104,7 +105,7 @@ export function createApp(config) {
     const runtime = createRequestRuntime(config.MAX_CONCURRENT_REQUESTS, (...args) => logDebug(...args));
     const withRequestSlot = runtime.withRequestSlot;
     const createRequestLogger = runtime.createRequestLogger;
-    const toolOverridesRuntime = createToolOverridesRuntime(client, DISABLE_TOOLS, (...args) => logDebug(...args));
+    const toolOverridesRuntime = createToolOverridesRuntime(client, DISABLE_TOOLS, (...args) => logTrace(...args));
     const getToolOverrides = toolOverridesRuntime.getToolOverrides;
 
     // Auth middleware
@@ -142,6 +143,12 @@ export function createApp(config) {
     const logDebug = (...args) => {
         if (DEBUG) {
             console.log('[Proxy][Debug]', ...args);
+        }
+    };
+
+    const logTrace = (...args) => {
+        if (TRACE) {
+            console.log('[Proxy][Trace]', ...args);
         }
     };
 
@@ -369,7 +376,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         try {
                             const collectPromise = collectFromEvents(
                             client,
-                            (...args) => logDebug(...args),
+                            (...args) => logTrace(...args),
                             sessionId,
                             REQUEST_TIMEOUT_MS,
                             sendDelta,
@@ -857,7 +864,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 try {
                     const collectPromise = collectFromEvents(
                         client,
-                        (...args) => logDebug(...args),
+                        (...args) => logTrace(...args),
                         sessionId,
                         REQUEST_TIMEOUT_MS,
                         sendResponsesDelta,

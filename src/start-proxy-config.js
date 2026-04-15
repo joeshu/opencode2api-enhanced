@@ -80,6 +80,10 @@ export function buildStartProxyConfig(options) {
             options.DEBUG === '1' ||
             String(process.env.OPENCODE_PROXY_DEBUG || '').toLowerCase() === 'true' ||
             process.env.OPENCODE_PROXY_DEBUG === '1',
+        TRACE: String(options.TRACE || '').toLowerCase() === 'true' ||
+            options.TRACE === '1' ||
+            String(process.env.OPENCODE_PROXY_TRACE || '').toLowerCase() === 'true' ||
+            process.env.OPENCODE_PROXY_TRACE === '1',
         ZEN_API_KEY: options.ZEN_API_KEY || process.env.OPENCODE_ZEN_API_KEY || '',
         MODEL_CACHE_MS: Number(options.MODEL_CACHE_MS || process.env.OPENCODE_PROXY_MODEL_CACHE_MS || 60 * 1000),
         MAX_IMAGE_BYTES: Number(options.MAX_IMAGE_BYTES || process.env.OPENCODE_PROXY_MAX_IMAGE_BYTES || DEFAULT_MAX_IMAGE_BYTES),
