@@ -1,4 +1,5 @@
 export const TOOL_GUARD_MESSAGE = 'Tools are disabled. Do not call tools or function calls. Answer directly from the conversation and general knowledge. If external or real-time data is required, say so and ask the user to enable tools.';
+export const CONTEXT_SCOPE_GUARD_MESSAGE = 'Use repository or project context only when the user clearly refers to the current project, files, implementation details, architecture, or asks for codebase-specific help. For ambiguous or general questions, do not assume the current repository is the target; answer generally first or ask a brief clarifying question if necessary.';
 
 export function buildSystemPrompt(systemMsg, reasoningEffort = null, options = {}) {
     const omitSystemPrompt = options.omitSystemPrompt === true;
@@ -8,6 +9,7 @@ export function buildSystemPrompt(systemMsg, reasoningEffort = null, options = {
     if (!omitSystemPrompt && systemMsg && systemMsg.trim()) {
         parts.push(systemMsg.trim());
     }
+    parts.push(CONTEXT_SCOPE_GUARD_MESSAGE);
     if (reasoningEffort && reasoningEffort !== 'none') {
         parts.push(`[Reasoning Effort: ${reasoningEffort}]`);
     }
