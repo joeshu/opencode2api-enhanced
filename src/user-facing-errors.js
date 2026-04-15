@@ -14,6 +14,24 @@ export function getUserFacingHint(errorLike) {
             hint: 'Too many requests are being processed at once. Please retry shortly.'
         };
     }
+    if (type === 'prompt_send_timeout_error') {
+        return {
+            retryable: true,
+            hint: 'The backend took too long to accept the prompt. Please retry shortly.'
+        };
+    }
+    if (type === 'poll_response_timeout_error') {
+        return {
+            retryable: true,
+            hint: 'The backend accepted the prompt but no final response was collected in time. Please retry.'
+        };
+    }
+    if (type === 'stream_request_timeout_error') {
+        return {
+            retryable: true,
+            hint: 'The stream did not complete in time. Please retry or switch to a non-streaming request.'
+        };
+    }
     if (type === 'upstream_tool_execution_error') {
         return {
             retryable: true,

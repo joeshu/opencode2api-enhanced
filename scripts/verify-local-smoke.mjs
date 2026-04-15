@@ -152,7 +152,10 @@ const backendServer = http.createServer(async (req, res) => {
       const textPrompt = Array.isArray(body.parts)
         ? body.parts.filter((part) => part.type === 'text').map((part) => part.text || '').join('\n')
         : '';
-      const responseText = textPrompt.includes('SECOND')
+      if (process.env.SMOKE_DEBUG === '1') {
+        console.log('[SMOKE_BACKEND] prompt', sessionId, JSON.stringify(textPrompt));
+      }
+      const responseText = textPrompt.toUpperCase().includes('SECOND')
         ? 'Smoke reply SECOND'
         : textPrompt.includes('responses')
           ? 'Smoke response API'
@@ -162,7 +165,11 @@ const backendServer = http.createServer(async (req, res) => {
       current.responseText = responseText;
       current.reasoningText = reasoningText;
       current.assistantReadyAt = Date.now() + 700;
+      current.messageFetchCount = 0;
       sessionStore.set(sessionId, current);
+      if (process.env.SMOKE_DEBUG === '1') {
+        console.log('[SMOKE_BACKEND] set-state', sessionId, JSON.stringify({ responseText: current.responseText, reasoningText: current.reasoningText, messageFetchCount: current.messageFetchCount }));
+      }
       await delay(700);
       activePrompts -= 1;
       return sendJson(res, 200, {
@@ -186,6 +193,9 @@ const backendServer = http.createServer(async (req, res) => {
         current.reasoningText = 'Mock reasoning path';
       }
       sessionStore.set(sessionId, current);
+      if (process.env.SMOKE_DEBUG === '1') {
+        console.log('[SMOKE_BACKEND] get-state', sessionId, JSON.stringify({ responseText: current.responseText, reasoningText: current.reasoningText, messageFetchCount: current.messageFetchCount }));
+      }
       if (current.messageFetchCount === 1) {
         return sendJson(res, 200, {
           parts: [
@@ -277,6 +287,33 @@ async function main() {
     assert(responsesBody.object === 'response', `responses object unexpected ${responsesBody.object}`);
     assert((responsesBody.output?.[0]?.content?.[0]?.text || '').includes('Smoke response API'), 'responses content missing');
     printCheck('responses', `requestId=${responses.headers['x-request-id']}`);
+
+    const reuseFirst = await post('/v1/chat/completions', {
+      model: 'opencode/kimi-k2.5-free',
+      messages: [{ role: 'user', content: 'hello with reasoning' }],
+      conversation_id: 'smoke_reuse_conv'
+    }, {
+      Authorization: `Bearer ${apiKey}`,
+      'x-request-id': 'smoke_reuse_first'
+    });
+    assert(reuseFirst.status === 200, `reuse first expected 200 got ${reuseFirst.status}`);
+
+    const reuseSecond = await post('/v1/chat/completions', {
+      model: 'opencode/kimi-k2.5-free',
+      messages: [{ role: 'user', content: 'SECOND turn please' }],
+      conversation_id: 'smoke_reuse_conv'
+    }, {
+      Authorization: `Bearer ${apiKey}`,
+      'x-request-id': 'smoke_reuse_second'
+    });
+    const reuseSecondBody = parseBody(reuseSecond);
+    if (process.env.SMOKE_DEBUG === '1') {
+      console.log('[SMOKE_REUSE_SECOND_BODY]', JSON.stringify(reuseSecondBody));
+    }
+    assert(reuseSecond.status === 200, `reuse second expected 200 got ${reuseSecond.status}`);
+    assert((reuseSecondBody.choices?.[0]?.message?.content || '').includes('SECOND'), 'reuse second content mismatch');
+    assert(sessionCreateCount === 3, `session reuse expected 3 session creates after reuse flow, got ${sessionCreateCount}`);
+    printCheck('session reuse', `sessionCreateCount=${sessionCreateCount}`);
 
     const concurrent = await Promise.all([
       post('/v1/chat/completions', {

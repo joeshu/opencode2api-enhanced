@@ -2,7 +2,7 @@ export async function promptWithTimeout(client, logDebug, sleep, promptParams, t
     const attempt = async (retriesLeft) => {
         try {
             const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error(`Request timeout after ${timeoutMs}ms`)), timeoutMs);
+                setTimeout(() => reject(new Error(`prompt_send_timeout after ${timeoutMs}ms`)), timeoutMs);
             });
             return Promise.race([client.session.prompt(promptParams), timeoutPromise]);
         } catch (err) {

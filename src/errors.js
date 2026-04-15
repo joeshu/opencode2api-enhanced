@@ -18,6 +18,18 @@ export function normalizeProxyError(error) {
         return createProxyError(message, 429, 'rate_limit_error');
     }
 
+    if (message.includes('prompt_send_timeout')) {
+        return createProxyError(message, 504, 'prompt_send_timeout_error');
+    }
+
+    if (message.includes('poll_response_timeout')) {
+        return createProxyError(message, 504, 'poll_response_timeout_error');
+    }
+
+    if (message.includes('stream_request_timeout')) {
+        return createProxyError(message, 504, 'stream_request_timeout_error');
+    }
+
     if (message.includes('Backend startup timeout') || message.includes('not ready') || message.includes('warming up')) {
         return createProxyError(message, 503, 'backend_not_ready_error');
     }

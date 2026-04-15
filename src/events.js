@@ -38,7 +38,7 @@ export async function pollForAssistantResponse(client, logDebug, sleep, sessionI
         await sleep(intervalMs);
     }
     logDebug('Polling timeout', { sessionId, ms: Date.now() - pollStart });
-    throw new Error(`Request timeout after ${timeoutMs}ms`);
+    throw new Error(`poll_response_timeout after ${timeoutMs}ms`);
 }
 
 export async function collectFromEvents(client, logDebug, sessionId, timeoutMs, onDelta, firstDeltaTimeoutMs, idleTimeoutMs) {
@@ -58,7 +58,7 @@ export async function collectFromEvents(client, logDebug, sessionId, timeoutMs, 
             if (finished) return;
             finished = true;
             controller.abort();
-            reject(new Error(`Request timeout after ${timeoutMs}ms`));
+            reject(new Error(`stream_request_timeout after ${timeoutMs}ms`));
         }, timeoutMs);
 
         const firstDeltaTimer = firstDeltaTimeoutMs
@@ -67,7 +67,7 @@ export async function collectFromEvents(client, logDebug, sessionId, timeoutMs, 
                 finished = true;
                 controller.abort();
                 logDebug('No event data received', { sessionId, ms: Date.now() - startedAt });
-                resolve({ content: '', reasoning: '', noData: true });
+                resolve({ content: '', reasoning: '', noData: true, stage: 'first_delta_timeout' });
             }, firstDeltaTimeoutMs)
             : null;
 
