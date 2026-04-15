@@ -534,8 +534,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             reasoningTokens
                         }))}\n\n`);
                         emitToolStatus('completed', 'Tool-enabled generation completed');
-                        emitToolStatus('completed', 'Tool-enabled generation completed');
-                res.write('data: [DONE]\n\n');
+                        res.write('data: [DONE]\n\n');
                         res.end();
                     } else {
                         await promptWithTimeout(client, (...args) => logDebug(...args), sleep, promptParams, REQUEST_TIMEOUT_MS);
