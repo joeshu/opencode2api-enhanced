@@ -7,7 +7,13 @@ const SUSPICIOUS_PATTERNS = [
     /at runLoop/i,
     /at evaluate/i,
     /failed to restore snapshot/i,
-    /git cat-file --batch/i
+    /git cat-file --batch/i,
+    /<\/tool_call>/i,
+    /<\/function>/i,
+    /<\/parameter>/i,
+    /<tool_call>/i,
+    /<function>/i,
+    /<parameter>/i
 ];
 
 export function detectCorruptedUpstreamContent(text) {

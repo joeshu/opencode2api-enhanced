@@ -37,7 +37,13 @@ export function stripFunctionCalls(text, trim = true, disableTools = true) {
     if (!disableTools || !text) return text;
     const cleaned = text
         .replace(/<function_calls>[\s\S]*?<\/function_calls>/g, '')
-        .replace(/<\/?function_calls>/g, '');
+        .replace(/<\/?function_calls>/g, '')
+        .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
+        .replace(/<function>[\s\S]*?<\/function>/g, '')
+        .replace(/<parameter>[\s\S]*?<\/parameter>/g, '')
+        .replace(/<\/?tool_call>/g, '')
+        .replace(/<\/?function>/g, '')
+        .replace(/<\/?parameter>/g, '');
     return trim ? cleaned.trim() : cleaned;
 }
 
