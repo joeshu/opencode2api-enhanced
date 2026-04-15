@@ -35,7 +35,7 @@ import { buildStartProxyConfig } from './start-proxy-config.js';
 import { buildChatCompletionResponse, buildResponsesApiResponse } from './response-builders.js';
 import { buildChatStreamChunk, buildChatStreamUsageChunk } from './stream-builders.js';
 import { cleanupSessionLater } from './session-cleanup.js';
-import { sanitizeAssistantPayload } from './output-sanitizer.js';
+import { sanitizeAssistantPayload, detectCorruptedUpstreamContent } from './output-sanitizer.js';
 import { buildResponsesCreatedEvent, buildResponsesMessageOutputAddedEvent, buildResponsesContentPartAddedEvent, buildResponsesReasoningOutputAddedEvent, buildResponsesReasoningDeltaEvent, buildResponsesTextDeltaEvent, buildResponsesReasoningDoneEvent, buildResponsesReasoningItemDoneEvent, buildResponsesTextDoneEvent, buildResponsesContentPartDoneEvent, buildResponsesMessageItemDoneEvent, buildResponsesCompletedEvent } from './responses-stream-builders.js';
 import { ensureModelSession, buildPromptParams } from './session-preparation.js';
 import { createLatencyTracker } from './latency-tracker.js';
@@ -271,6 +271,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         const filterReasoningDelta = createToolCallFilter(DISABLE_TOOLS);
                         let streamedContent = '';
                         let streamedReasoning = '';
+                        let streamCorrupted = false;
                         insideReasoning = false;
                         keepaliveInterval = null;
                         completionTokens = 0;
@@ -298,6 +299,28 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             }
                             const filtered = isReasoning ? filterReasoningDelta(delta) : filterContentDelta(delta);
                             if (!filtered) return;
+                            if (streamCorrupted) return;
+                            if (detectCorruptedUpstreamContent(filtered)) {
+                                streamCorrupted = true;
+                                logDebug('Suppressed corrupted stream delta', { sessionId, isReasoning, preview: filtered.slice(0, 120) });
+                                const fallbackMessage = '[Tool workflow failed. Please retry or switch to stable mode.]';
+                                if (insideReasoning) {
+                                    res.write(`data: ${JSON.stringify(buildChatStreamChunk({
+                                        id,
+                                        model: `${pID}/${mID}`,
+                                        content: '\n</think>\n\n'
+                                    }))}\n\n`);
+                                    insideReasoning = false;
+                                }
+                                streamedContent += fallbackMessage;
+                                completionTokens += Math.ceil(fallbackMessage.length / 4);
+                                res.write(`data: ${JSON.stringify(buildChatStreamChunk({
+                                    id,
+                                    model: `${pID}/${mID}`,
+                                    content: fallbackMessage
+                                }))}\n\n`);
+                                return;
+                            }
                             latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, isReasoning });
                             if (isReasoning) {
                                 if (!insideReasoning) {
@@ -732,6 +755,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
 
             let content = '';
             let reasoning = '';
+            let responsesStreamCorrupted = false;
             if (stream) {
                 res.setHeader('Content-Type', 'text/event-stream');
                 res.setHeader('Cache-Control', 'no-cache');
@@ -790,6 +814,22 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     if (!delta) return;
                     const filtered = isReasoning ? filterReasoningDelta(delta) : filterContentDelta(delta);
                     if (!filtered) return;
+                    if (responsesStreamCorrupted) return;
+                    if (detectCorruptedUpstreamContent(filtered)) {
+                        responsesStreamCorrupted = true;
+                        logDebug('Suppressed corrupted responses delta', { sessionId, isReasoning, preview: filtered.slice(0, 120) });
+                        const fallbackMessage = '[Tool workflow failed. Please retry or switch to stable mode.]';
+                        ensureOutputScaffold();
+                        content += fallbackMessage;
+                        emit(buildResponsesTextDeltaEvent({
+                            sequenceNumber: nextSeq(),
+                            outputIndex: messageOutputIndex,
+                            contentIndex: contentIndex,
+                            itemId: outputItemId,
+                            delta: fallbackMessage
+                        }));
+                        return;
+                    }
                     latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, isReasoning });
                     if (isReasoning) {
                         ensureReasoningScaffold();
