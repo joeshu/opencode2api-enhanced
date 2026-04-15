@@ -70,6 +70,7 @@ export function createApp(config) {
         DEBUG,
         TRACE,
         DISABLE_TOOLS,
+        TOOL_POLICY,
         PROMPT_MODE,
         OMIT_SYSTEM_PROMPT,
         AUTO_CLEANUP_CONVERSATIONS,
@@ -107,7 +108,7 @@ export function createApp(config) {
     const runtime = createRequestRuntime(config.MAX_CONCURRENT_REQUESTS, (...args) => logDebug(...args));
     const withRequestSlot = runtime.withRequestSlot;
     const createRequestLogger = runtime.createRequestLogger;
-    const toolOverridesRuntime = createToolOverridesRuntime(client, DISABLE_TOOLS, (...args) => logTrace(...args));
+    const toolOverridesRuntime = createToolOverridesRuntime(client, DISABLE_TOOLS, (...args) => logTrace(...args), TOOL_POLICY);
     const getToolOverrides = toolOverridesRuntime.getToolOverrides;
 
     // Auth middleware
@@ -668,6 +669,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
             config: {
                 manageBackend: config.MANAGE_BACKEND,
                 disableTools: DISABLE_TOOLS,
+                toolPolicy: TOOL_POLICY,
                 promptMode: PROMPT_MODE,
                 autoCleanupConversations: AUTO_CLEANUP_CONVERSATIONS,
                 requestTimeoutMs: REQUEST_TIMEOUT_MS,

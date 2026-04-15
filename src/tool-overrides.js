@@ -1,10 +1,10 @@
-export function createToolOverridesRuntime(client, disableTools, logDebug) {
+export function createToolOverridesRuntime(client, disableTools, logDebug, toolPolicy = 'off') {
     const TOOL_IDS_CACHE_MS = 5 * 60 * 1000;
     let cachedToolOverrides = null;
     let cachedToolAt = 0;
 
     const getToolOverrides = async () => {
-        if (!disableTools) return null;
+        if (!disableTools || toolPolicy === 'full') return null;
         if (cachedToolOverrides && Date.now() - cachedToolAt < TOOL_IDS_CACHE_MS) {
             return cachedToolOverrides;
         }
@@ -21,10 +21,10 @@ export function createToolOverridesRuntime(client, disableTools, logDebug) {
             });
             cachedToolOverrides = overrides;
             cachedToolAt = Date.now();
-            logDebug('Tool overrides loaded', { count: ids.length });
+            logDebug('Tool overrides loaded', { count: ids.length, toolPolicy });
             return overrides;
         } catch (e) {
-            logDebug('Tool override fetch failed', { error: e.message });
+            logDebug('Tool override fetch failed', { error: e.message, toolPolicy });
             return null;
         }
     };

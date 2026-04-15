@@ -17,6 +17,7 @@ function getProfileDefaults(profile) {
     if (mode === 'tools-stable') {
         return {
             DISABLE_TOOLS: false,
+            TOOL_POLICY: 'full',
             MAX_CONCURRENT_REQUESTS: 2,
             REQUEST_TIMEOUT_MS: 240000,
             SERVER_REQUEST_TIMEOUT_MS: 270000,
@@ -28,6 +29,7 @@ function getProfileDefaults(profile) {
     }
     return {
         DISABLE_TOOLS: true,
+        TOOL_POLICY: 'off',
         MAX_CONCURRENT_REQUESTS: 8,
         REQUEST_TIMEOUT_MS: 180000,
         SERVER_REQUEST_TIMEOUT_MS: 210000,
@@ -48,9 +50,13 @@ export function buildStartProxyConfig(options) {
         normalizeBool(process.env.OPENCODE_DISABLE_TOOLS) ??
         profileDefaults.DISABLE_TOOLS;
 
-    const promptMode = options.PROMPT_MODE || options.promptMode || process.env.OPENCODE_PROXY_PROMPT_MODE || 'standard';
-    const cleanupIntervalMs = Number(options.CLEANUP_INTERVAL_MS || process.env.OPENCODE_PROXY_CLEANUP_INTERVAL_MS || 12 * 60 * 60 * 1000);
-    const cleanupMaxAgeMs = Number(options.CLEANUP_MAX_AGE_MS || process.env.OPENCODE_PROXY_CLEANUP_MAX_AGE_MS || 24 * 60 * 60 * 1000);
+    const toolPolicy = String(
+        options.TOOL_POLICY ||
+        options.toolPolicy ||
+        process.env.OPENCODE_TOOL_POLICY ||
+        profileDefaults.TOOL_POLICY ||
+        (disableTools ? 'off' : 'full')
+    ).trim().toLowerCase();
 
     return {
         PORT: options.PORT || 10000,
@@ -75,6 +81,7 @@ export function buildStartProxyConfig(options) {
         MANAGE_BACKEND: normalizeBool(options.MANAGE_BACKEND) ??
             normalizeBool(process.env.OPENCODE_PROXY_MANAGE_BACKEND) ??
             false,
+        TOOL_POLICY: toolPolicy,
         DISABLE_TOOLS: disableTools,
         DEBUG: String(options.DEBUG || '').toLowerCase() === 'true' ||
             options.DEBUG === '1' ||

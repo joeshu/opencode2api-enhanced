@@ -1,3 +1,13 @@
+function inferModelCapabilities(modelId) {
+    const id = String(modelId || '').toLowerCase();
+    return {
+        supports_streaming: true,
+        supports_reasoning: true,
+        supports_tools: !id.includes('no-tools'),
+        supports_images: false
+    };
+}
+
 export function createModelsRuntime(client, modelCacheMs) {
     const MODEL_CACHE_MS = Number.isFinite(Number(modelCacheMs)) && Number(modelCacheMs) > 0
         ? Number(modelCacheMs)
@@ -34,7 +44,8 @@ export function createModelsRuntime(client, modelCacheMs) {
                         created: (mData && mData.release_date)
                             ? Math.floor(new Date(mData.release_date).getTime() / 1000)
                             : 1704067200,
-                        owned_by: p.id
+                        owned_by: p.id,
+                        capabilities: inferModelCapabilities(`${p.id}/${mId}`)
                     });
                 });
             }
