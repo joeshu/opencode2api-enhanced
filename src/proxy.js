@@ -644,6 +644,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
         try {
             await withRequestSlot(requestId, async () => {
             const { requestId, log } = createRequestLogger(req, res);
+            const latency = createLatencyTracker(log, { route: '/v1/responses', stream: Boolean(stream) });
             const { 
                 model, 
                 input, 
