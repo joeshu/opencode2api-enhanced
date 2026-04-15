@@ -32,6 +32,7 @@ import { cleanupConversationFiles, registerConversationCleanup } from './convers
 import { createServerRuntime } from './server-runtime.js';
 import { buildStartProxyConfig } from './start-proxy-config.js';
 import { buildChatCompletionResponse, buildResponsesApiResponse } from './response-builders.js';
+import { buildChatStreamChunk, buildChatStreamUsageChunk } from './stream-builders.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 registerProcessCleanup();
@@ -307,46 +308,32 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             if (!filtered) return;
                             if (isReasoning) {
                                 if (!insideReasoning) {
-                                    res.write(`data: ${JSON.stringify({
+                                    res.write(`data: ${JSON.stringify(buildChatStreamChunk({
                                         id,
-                                        object: 'chat.completion.chunk',
-                                        created: Math.floor(Date.now() / 1000),
                                         model: `${pID}/${mID}`,
-                                        choices: [{
-                                            index: 0,
-                                            delta: { content: '<think>\n' },
-                                            finish_reason: null
-                                        }]
-                                    })}\n\n`);
+                                        content: '<think>\n'
+                                    }))}\n\n`);
                                     insideReasoning = true;
                                 }
                                 streamedReasoning += filtered;
                                 reasoningTokens += Math.ceil(filtered.length / 4);
                             } else {
                                 if (insideReasoning) {
-                                    res.write(`data: ${JSON.stringify({
+                                    res.write(`data: ${JSON.stringify(buildChatStreamChunk({
                                         id,
-                                        object: 'chat.completion.chunk',
-                                        created: Math.floor(Date.now() / 1000),
                                         model: `${pID}/${mID}`,
-                                        choices: [{
-                                            index: 0,
-                                            delta: { content: '\n</think>\n\n' },
-                                            finish_reason: null
-                                        }]
-                                    })}\n\n`);
+                                        content: '\n</think>\n\n'
+                                    }))}\n\n`);
                                     insideReasoning = false;
                                 }
                                 streamedContent += filtered;
                                 completionTokens += Math.ceil(filtered.length / 4);
                             }
-                            const chunk = {
+                            const chunk = buildChatStreamChunk({
                                 id,
-                                object: 'chat.completion.chunk',
-                                created: Math.floor(Date.now() / 1000),
                                 model: `${pID}/${mID}`,
-                                choices: [{ index: 0, delta: { content: filtered }, finish_reason: null }]
-                            };
+                                content: filtered
+                            });
                             res.write(`data: ${JSON.stringify(chunk)}\n\n`);
                         };
 
@@ -487,17 +474,11 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         }
 
                         if (insideReasoning) {
-                            res.write(`data: ${JSON.stringify({
+                            res.write(`data: ${JSON.stringify(buildChatStreamChunk({
                                 id,
-                                object: 'chat.completion.chunk',
-                                created: Math.floor(Date.now() / 1000),
                                 model: `${pID}/${mID}`,
-                                choices: [{
-                                    index: 0,
-                                    delta: { content: '\n</think>\n\n' },
-                                    finish_reason: null
-                                }]
-                            })}\n\n`);
+                                content: '\n</think>\n\n'
+                            }))}\n\n`);
                         }
 
                         if (keepaliveInterval) clearInterval(keepaliveInterval);
@@ -505,18 +486,12 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         const promptTokens = Math.ceil((fullPromptText || '').length / 4);
                         const totalTokens = promptTokens + completionTokens + reasoningTokens;
                         
-                        res.write(`data: ${JSON.stringify({ 
-                            id, 
-                            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
-                            usage: {
-                                prompt_tokens: promptTokens,
-                                completion_tokens: completionTokens + reasoningTokens,
-                                total_tokens: totalTokens,
-                                completion_tokens_details: {
-                                    reasoning_tokens: reasoningTokens
-                                }
-                            }
-                        })}\n\n`);
+                        res.write(`data: ${JSON.stringify(buildChatStreamUsageChunk({
+                            id,
+                            promptTokens,
+                            completionTokens,
+                            reasoningTokens
+                        }))}\n\n`);
                         res.write('data: [DONE]\n\n');
                         res.end();
                     } else {
