@@ -8,6 +8,15 @@ function inferModelCapabilities(modelId) {
     };
 }
 
+function buildModelAliases(fullId) {
+    const id = String(fullId || '');
+    const [, modelId = id] = id.split('/');
+    const aliases = [id, modelId];
+    const normalized = modelId.replace(/^gpt(\d)/i, 'gpt-$1');
+    if (!aliases.includes(normalized)) aliases.push(normalized);
+    return aliases;
+}
+
 export function createModelsRuntime(client, modelCacheMs) {
     const MODEL_CACHE_MS = Number.isFinite(Number(modelCacheMs)) && Number(modelCacheMs) > 0
         ? Number(modelCacheMs)
@@ -45,7 +54,8 @@ export function createModelsRuntime(client, modelCacheMs) {
                             ? Math.floor(new Date(mData.release_date).getTime() / 1000)
                             : 1704067200,
                         owned_by: p.id,
-                        capabilities: inferModelCapabilities(`${p.id}/${mId}`)
+                        capabilities: inferModelCapabilities(`${p.id}/${mId}`),
+                        aliases: buildModelAliases(`${p.id}/${mId}`)
                     });
                 });
             }

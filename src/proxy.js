@@ -842,7 +842,11 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 emit(buildResponsesCreatedEvent({
                     responseId,
                     model: `${pID}/${mID}`,
-                    sequenceNumber: nextSeq()
+                    sequenceNumber: nextSeq(),
+                    meta: {
+                        tool_policy: TOOL_POLICY,
+                        disable_tools: DISABLE_TOOLS
+                    }
                 }));
 
                 const filterContentDelta = createToolCallFilter(DISABLE_TOOLS);
@@ -1025,7 +1029,11 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     content: sanitized.content,
                     reasoning: sanitized.reasoning,
                     reasoningLevel,
-                    fullPromptText
+                    fullPromptText,
+                    meta: {
+                        tool_policy: TOOL_POLICY,
+                        disable_tools: DISABLE_TOOLS
+                    }
                 });
                 emit(buildResponsesCompletedEvent({ sequenceNumber: nextSeq(), response }));
                 res.write('data: [DONE]\n\n');
@@ -1057,7 +1065,11 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 content: sanitized.content,
                 reasoning: sanitized.reasoning,
                 reasoningLevel,
-                fullPromptText
+                fullPromptText,
+                meta: {
+                    tool_policy: TOOL_POLICY,
+                    disable_tools: DISABLE_TOOLS
+                }
             });
 
             cleanupSessionLater(client, sessionId, 3000, conversationKey);

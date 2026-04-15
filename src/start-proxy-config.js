@@ -27,6 +27,19 @@ function getProfileDefaults(profile) {
             SHUTDOWN_GRACE_MS: 15000
         };
     }
+    if (mode === 'mobile-safe') {
+        return {
+            DISABLE_TOOLS: false,
+            TOOL_POLICY: 'readonly',
+            MAX_CONCURRENT_REQUESTS: 4,
+            REQUEST_TIMEOUT_MS: 180000,
+            SERVER_REQUEST_TIMEOUT_MS: 210000,
+            SERVER_HEADERS_TIMEOUT_MS: 65000,
+            SERVER_KEEPALIVE_TIMEOUT_MS: 5000,
+            SERVER_SOCKET_TIMEOUT_MS: 240000,
+            SHUTDOWN_GRACE_MS: 10000
+        };
+    }
     return {
         DISABLE_TOOLS: true,
         TOOL_POLICY: 'off',

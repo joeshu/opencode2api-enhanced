@@ -1,4 +1,4 @@
-export function buildResponsesCreatedEvent({ responseId, model, sequenceNumber }) {
+export function buildResponsesCreatedEvent({ responseId, model, sequenceNumber, meta = {} }) {
     return {
         type: 'response.created',
         sequence_number: sequenceNumber,
@@ -6,7 +6,8 @@ export function buildResponsesCreatedEvent({ responseId, model, sequenceNumber }
             id: responseId,
             object: 'response',
             created: Math.floor(Date.now() / 1000),
-            model
+            model,
+            ...(Object.keys(meta).length ? { meta } : {})
         }
     };
 }

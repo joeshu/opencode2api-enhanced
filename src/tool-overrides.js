@@ -3,6 +3,11 @@ export function createToolOverridesRuntime(client, disableTools, logDebug, toolP
     let cachedToolOverrides = null;
     let cachedToolAt = 0;
 
+    const isReadonlyTool = (id) => {
+        const name = String(id || '').toLowerCase();
+        return name.includes('read') || name.includes('search') || name.includes('list') || name.includes('find') || name.includes('get') || name.includes('weather') || name.includes('news') || name.includes('fetch') || name.includes('query');
+    };
+
     const getToolOverrides = async () => {
         if (!disableTools || toolPolicy === 'full') return null;
         if (cachedToolOverrides && Date.now() - cachedToolAt < TOOL_IDS_CACHE_MS) {
@@ -17,7 +22,11 @@ export function createToolOverridesRuntime(client, disableTools, logDebug, toolP
                     : [];
             const overrides = {};
             ids.forEach((id) => {
-                overrides[id] = false;
+                if (toolPolicy === 'readonly') {
+                    overrides[id] = isReadonlyTool(id);
+                } else {
+                    overrides[id] = false;
+                }
             });
             cachedToolOverrides = overrides;
             cachedToolAt = Date.now();
