@@ -37,6 +37,7 @@ import { buildChatStreamChunk, buildChatStreamUsageChunk } from './stream-builde
 import { cleanupSessionLater } from './session-cleanup.js';
 import { sanitizeAssistantPayload } from './output-sanitizer.js';
 import { buildResponsesCreatedEvent, buildResponsesMessageOutputAddedEvent, buildResponsesContentPartAddedEvent, buildResponsesReasoningOutputAddedEvent, buildResponsesReasoningDeltaEvent, buildResponsesTextDeltaEvent, buildResponsesReasoningDoneEvent, buildResponsesReasoningItemDoneEvent, buildResponsesTextDoneEvent, buildResponsesContentPartDoneEvent, buildResponsesMessageItemDoneEvent, buildResponsesCompletedEvent } from './responses-stream-builders.js';
+import { ensureModelSession, buildPromptParams } from './session-preparation.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 registerProcessCleanup();
@@ -193,12 +194,25 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
 
                     log('Request params', { temperature: requestParams.temperature, max_tokens: requestParams.max_tokens, top_p: requestParams.top_p, reasoning_effort: reasoningLevel });
 
-                    const resolvedModel = await resolveRequestedModel(model);
-                    pID = resolvedModel.providerID;
-                    mID = resolvedModel.modelID;
-                    if (resolvedModel.aliasFrom) {
-                        log('Resolved model alias', { from: resolvedModel.aliasFrom, to: resolvedModel.resolved });
-                    }
+                    const prepared = await ensureModelSession(config, {
+                        client,
+                        resolveRequestedModel,
+                        ensureBackend,
+                        backendState,
+                        checkHealth,
+                        resolveOpencodePath,
+                        STARTUP_WAIT_ITERATIONS,
+                        STARTUP_WAIT_INTERVAL_MS,
+                        STARTING_WAIT_ITERATIONS,
+                        STARTING_WAIT_INTERVAL_MS,
+                        logDebug: (...args) => logDebug(...args),
+                        model,
+                        log,
+                        sessionLogLabel: 'Session created'
+                    });
+                    pID = prepared.providerID;
+                    mID = prepared.modelID;
+                    sessionId = prepared.sessionId;
 
                     const { parts, system: systemMsg, fullPromptText, lastUserMsg } = await buildChatPromptParts(messages, {
                         getImageDataUri,
@@ -257,18 +271,17 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     let completionTokens = 0;
                     let reasoningTokens = 0;
 
-                    const promptParams = {
-                        path: { id: sessionId },
-                        body: {
-                            model: { providerID: pID, modelID: mID },
-                            system: systemWithGuard,
-                            parts: parts,
-                            ...(requestParams.max_tokens && { max_tokens: requestParams.max_tokens }),
-                            ...(requestParams.temperature !== undefined && { temperature: requestParams.temperature }),
-                            ...(requestParams.top_p !== undefined && { top_p: requestParams.top_p }),
-                            ...(requestParams.stop && { stop: requestParams.stop })
-                        }
-                    };
+                    const promptParams = buildPromptParams({
+                        sessionId,
+                        providerID: pID,
+                        modelID: mID,
+                        system: systemWithGuard,
+                        parts,
+                        max_tokens: requestParams.max_tokens,
+                        temperature: requestParams.temperature,
+                        top_p: requestParams.top_p,
+                        stop: requestParams.stop
+                    });
                     const toolOverrides = await getToolOverrides();
                     if (toolOverrides && Object.keys(toolOverrides).length > 0) {
                         promptParams.body.tools = toolOverrides;
@@ -694,35 +707,25 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 return res.status(400).json({ error: { message: 'input is required' } });
             }
 
-            const resolvedModel = await resolveRequestedModel(model);
-            const pID = resolvedModel.providerID;
-            const mID = resolvedModel.modelID;
-            if (resolvedModel.aliasFrom) {
-                log('Resolved model alias', { from: resolvedModel.aliasFrom, to: resolvedModel.resolved });
-            }
-
-            await ensureBackend(config, {
+            const prepared = await ensureModelSession(config, {
+                client,
+                resolveRequestedModel,
+                ensureBackend,
                 backendState,
                 checkHealth,
                 resolveOpencodePath,
                 STARTUP_WAIT_ITERATIONS,
                 STARTUP_WAIT_INTERVAL_MS,
                 STARTING_WAIT_ITERATIONS,
-                STARTING_WAIT_INTERVAL_MS
+                STARTING_WAIT_INTERVAL_MS,
+                logDebug: (...args) => logDebug(...args),
+                model,
+                log,
+                sessionLogLabel: 'Responses session created'
             });
-
-            try {
-                await client.config.update({
-                    body: { activeModel: { providerID: pID, modelID: mID } }
-                });
-            } catch (e) { }
-
-            const sessionRes = await client.session.create();
-            const sessionId = sessionRes.data?.id;
-            if (!sessionId) {
-                throw new Error('Failed to create OpenCode session');
-            }
-            log('Responses session created', { sessionId, model: `${pID}/${mID}` });
+            const pID = prepared.providerID;
+            const mID = prepared.modelID;
+            const sessionId = prepared.sessionId;
 
             const parts = [];
             let fullPromptText = '';
@@ -732,25 +735,20 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 fullPromptText += `${msg.role}: ${msg.content}\n\n`;
             }
 
-            const promptParams = {
-                path: { id: sessionId },
-                body: {
-                    model: { providerID: pID, modelID: mID },
-                    ...(buildSystemPrompt(instructions, reasoningLevel, {
-                        omitSystemPrompt: OMIT_SYSTEM_PROMPT,
-                        disableTools: DISABLE_TOOLS,
-                        promptMode: PROMPT_MODE
-                    }) ? { system: buildSystemPrompt(instructions, reasoningLevel, {
-                        omitSystemPrompt: OMIT_SYSTEM_PROMPT,
-                        disableTools: DISABLE_TOOLS,
-                        promptMode: PROMPT_MODE
-                    }) } : {}),
-                    parts,
-                    ...(max_output_tokens && { max_tokens: max_output_tokens }),
-                    ...(temperature !== undefined && { temperature }),
-                    ...(top_p !== undefined && { top_p })
-                }
-            };
+            const promptParams = buildPromptParams({
+                sessionId,
+                providerID: pID,
+                modelID: mID,
+                system: buildSystemPrompt(instructions, reasoningLevel, {
+                    omitSystemPrompt: OMIT_SYSTEM_PROMPT,
+                    disableTools: DISABLE_TOOLS,
+                    promptMode: PROMPT_MODE
+                }),
+                parts,
+                max_tokens: max_output_tokens,
+                temperature,
+                top_p
+            });
 
             let content = '';
             let reasoning = '';
