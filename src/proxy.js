@@ -33,6 +33,7 @@ import { createServerRuntime } from './server-runtime.js';
 import { buildStartProxyConfig } from './start-proxy-config.js';
 import { buildChatCompletionResponse, buildResponsesApiResponse } from './response-builders.js';
 import { buildChatStreamChunk, buildChatStreamUsageChunk } from './stream-builders.js';
+import { buildResponsesCreatedEvent, buildResponsesMessageOutputAddedEvent, buildResponsesContentPartAddedEvent, buildResponsesReasoningOutputAddedEvent, buildResponsesReasoningDeltaEvent, buildResponsesTextDeltaEvent } from './responses-stream-builders.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 registerProcessCleanup();
@@ -761,55 +762,40 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 const nextSeq = () => sequenceNumber++;
                 const emit = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
 
-                emit({
-                    type: 'response.created',
-                    sequence_number: nextSeq(),
-                    response: { id: responseId, object: 'response', created: Math.floor(Date.now() / 1000), model: `${pID}/${mID}` }
-                });
+                emit(buildResponsesCreatedEvent({
+                    responseId,
+                    model: `${pID}/${mID}`,
+                    sequenceNumber: nextSeq()
+                }));
 
                 const filterContentDelta = createToolCallFilter(DISABLE_TOOLS);
                 const filterReasoningDelta = createToolCallFilter(DISABLE_TOOLS);
                 const ensureOutputScaffold = () => {
                     if (!announcedOutput) {
-                        emit({
-                            type: 'response.output_item.added',
-                            sequence_number: nextSeq(),
-                            output_index: messageOutputIndex,
-                            item: {
-                                id: outputItemId,
-                                type: 'message',
-                                status: 'in_progress',
-                                role: 'assistant',
-                                content: []
-                            }
-                        });
+                        emit(buildResponsesMessageOutputAddedEvent({
+                            sequenceNumber: nextSeq(),
+                            outputIndex: messageOutputIndex,
+                            itemId: outputItemId
+                        }));
                         announcedOutput = true;
                     }
                     if (!announcedContent) {
-                        emit({
-                            type: 'response.content_part.added',
-                            sequence_number: nextSeq(),
-                            output_index: messageOutputIndex,
-                            content_index: contentIndex,
-                            item_id: outputItemId,
-                            part: { type: 'output_text', text: '' }
-                        });
+                        emit(buildResponsesContentPartAddedEvent({
+                            sequenceNumber: nextSeq(),
+                            outputIndex: messageOutputIndex,
+                            contentIndex: contentIndex,
+                            itemId: outputItemId
+                        }));
                         announcedContent = true;
                     }
                 };
                 const ensureReasoningScaffold = () => {
                     if (!announcedReasoning) {
-                        emit({
-                            type: 'response.output_item.added',
-                            sequence_number: nextSeq(),
-                            output_index: reasoningOutputIndex,
-                            item: {
-                                id: reasoningItemId,
-                                type: 'reasoning',
-                                status: 'in_progress',
-                                summary: [{ type: 'summary_text', text: '' }]
-                            }
-                        });
+                        emit(buildResponsesReasoningOutputAddedEvent({
+                            sequenceNumber: nextSeq(),
+                            outputIndex: reasoningOutputIndex,
+                            itemId: reasoningItemId
+                        }));
                         announcedReasoning = true;
                     }
                 };
@@ -820,25 +806,22 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     if (isReasoning) {
                         ensureReasoningScaffold();
                         reasoning += filtered;
-                        emit({
-                            type: 'response.reasoning_summary_text.delta',
-                            sequence_number: nextSeq(),
-                            output_index: reasoningOutputIndex,
-                            item_id: reasoningItemId,
-                            summary_index: 0,
+                        emit(buildResponsesReasoningDeltaEvent({
+                            sequenceNumber: nextSeq(),
+                            outputIndex: reasoningOutputIndex,
+                            itemId: reasoningItemId,
                             delta: filtered
-                        });
+                        }));
                     } else {
                         ensureOutputScaffold();
                         content += filtered;
-                        emit({
-                            type: 'response.output_text.delta',
-                            sequence_number: nextSeq(),
-                            output_index: messageOutputIndex,
-                            content_index: contentIndex,
-                            item_id: outputItemId,
+                        emit(buildResponsesTextDeltaEvent({
+                            sequenceNumber: nextSeq(),
+                            outputIndex: messageOutputIndex,
+                            contentIndex: contentIndex,
+                            itemId: outputItemId,
                             delta: filtered
-                        });
+                        }));
                     }
                 };
 
