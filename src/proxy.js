@@ -38,6 +38,7 @@ import { cleanupSessionLater } from './session-cleanup.js';
 import { sanitizeAssistantPayload } from './output-sanitizer.js';
 import { buildResponsesCreatedEvent, buildResponsesMessageOutputAddedEvent, buildResponsesContentPartAddedEvent, buildResponsesReasoningOutputAddedEvent, buildResponsesReasoningDeltaEvent, buildResponsesTextDeltaEvent, buildResponsesReasoningDoneEvent, buildResponsesReasoningItemDoneEvent, buildResponsesTextDoneEvent, buildResponsesContentPartDoneEvent, buildResponsesMessageItemDoneEvent, buildResponsesCompletedEvent } from './responses-stream-builders.js';
 import { ensureModelSession, buildPromptParams } from './session-preparation.js';
+import { createLatencyTracker } from './latency-tracker.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 registerProcessCleanup();
@@ -169,6 +170,8 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 let insideReasoning = false;
                 let keepaliveInterval = null;
                 const { requestId, log } = createRequestLogger(req, res);
+            const latency = createLatencyTracker(log, { route: '/v1/responses', stream: Boolean(stream) });
+                const latency = createLatencyTracker(log, { route: '/v1/chat/completions', stream: Boolean(stream) });
 
                 try {
                     const { messages, model, stream: requestStream, temperature, max_tokens, top_p, frequency_penalty, presence_penalty, stop, reasoning_effort, reasoning } = req.body;
@@ -213,6 +216,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     pID = prepared.providerID;
                     mID = prepared.modelID;
                     sessionId = prepared.sessionId;
+                    latency.checkpoint('session_ready', { model: `${pID}/${mID}`, sessionId });
 
                     const { parts, system: systemMsg, fullPromptText, lastUserMsg } = await buildChatPromptParts(messages, {
                         getImageDataUri,
@@ -236,34 +240,6 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         parts: parts.length,
                         disableTools: DISABLE_TOOLS
                     });
-
-                    // Ensure backend is running
-                    await ensureBackend(config, {
-                        backendState,
-                        checkHealth,
-                        resolveOpencodePath,
-                        STARTUP_WAIT_ITERATIONS,
-                        STARTUP_WAIT_INTERVAL_MS,
-                        STARTING_WAIT_ITERATIONS,
-                        STARTING_WAIT_INTERVAL_MS
-                    });
-
-                    // Set active model
-                    try {
-                        await client.config.update({
-                            body: {
-                                activeModel: { providerID: pID, modelID: mID }
-                            }
-                        });
-                    } catch (confError) {
-                        logDebug('Failed to set active model:', confError.message);
-                    }
-
-                    // Create session
-                    const sessionRes = await client.session.create();
-                    sessionId = sessionRes.data?.id;
-                    if (!sessionId) throw new Error('Failed to create OpenCode session');
-                    log('Session created', { sessionId });
 
                     id = `chatcmpl-${Date.now()}`;
                     insideReasoning = false;
@@ -323,6 +299,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             }
                             const filtered = isReasoning ? filterReasoningDelta(delta) : filterContentDelta(delta);
                             if (!filtered) return;
+                            latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, isReasoning });
                             if (isReasoning) {
                                 if (!insideReasoning) {
                                     res.write(`data: ${JSON.stringify(buildChatStreamChunk({
@@ -395,6 +372,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                 error: collected.__error?.message
                             });
                             const { content, reasoning, error } = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS);
+                        latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, via: 'polling_fallback' });
                             if (error && !content && !reasoning) {
                                 sendDelta(`[Proxy Error] ${error.name || 'OpenCodeError'}: ${error.data?.message || error.message || 'Unknown error'}`);
                             } else {
@@ -514,6 +492,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     } else {
                         await promptWithTimeout(client, (...args) => logDebug(...args), sleep, promptParams, REQUEST_TIMEOUT_MS);
                         log('Prompt sent', { sessionId, phase: 'non-stream' });
+                        latency.checkpoint('prompt_sent', { model: `${pID}/${mID}`, sessionId, stream: false });
                         const { content, reasoning, error } = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS);
                         if (error && !content && !reasoning) {
                             return res.status(502).json({
@@ -726,6 +705,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
             const pID = prepared.providerID;
             const mID = prepared.modelID;
             const sessionId = prepared.sessionId;
+            latency.checkpoint('session_ready', { model: `${pID}/${mID}`, sessionId });
 
             const parts = [];
             let fullPromptText = '';
@@ -810,6 +790,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     if (!delta) return;
                     const filtered = isReasoning ? filterReasoningDelta(delta) : filterContentDelta(delta);
                     if (!filtered) return;
+                    latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, isReasoning });
                     if (isReasoning) {
                         ensureReasoningScaffold();
                         reasoning += filtered;
@@ -845,6 +826,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     );
                     const safeCollect = collectPromise.catch((err) => ({ __error: err }));
                     client.session.prompt(promptParams).catch(err => logDebug('Responses prompt error:', err.message));
+                    latency.checkpoint('prompt_sent', { model: `${pID}/${mID}`, sessionId, stream: true });
                     collected = await safeCollect;
                 } catch (e) {
                     collected = { __error: e };
@@ -941,7 +923,9 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 return res.end();
             }
 
+            latency.checkpoint('prompt_sent', { model: `${pID}/${mID}`, sessionId, stream: false });
             const responseRes = await client.session.prompt(promptParams);
+            latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, via: 'non_stream_response' });
             const responseParts = responseRes.data?.parts || [];
             
             content = responseParts.filter(p => p.type === 'text').map(p => p.text).join('\n');
