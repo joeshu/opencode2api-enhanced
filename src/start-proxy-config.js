@@ -74,7 +74,7 @@ export function buildStartProxyConfig(options) {
         SHUTDOWN_GRACE_MS: Number(options.SHUTDOWN_GRACE_MS || process.env.OPENCODE_PROXY_SHUTDOWN_GRACE_MS || profileDefaults.SHUTDOWN_GRACE_MS || 0) || undefined,
         MANAGE_BACKEND: normalizeBool(options.MANAGE_BACKEND) ??
             normalizeBool(process.env.OPENCODE_PROXY_MANAGE_BACKEND) ??
-            true,
+            false,
         DISABLE_TOOLS: disableTools,
         DEBUG: String(options.DEBUG || '').toLowerCase() === 'true' ||
             options.DEBUG === '1' ||

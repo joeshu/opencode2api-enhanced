@@ -1,4 +1,5 @@
 import { shouldUpdateActiveModel, markActiveModel } from './active-model-cache.js';
+import { getReusableSession, rememberReusableSession } from './session-store.js';
 
 export async function ensureModelSession(config, deps) {
     const {
@@ -15,7 +16,8 @@ export async function ensureModelSession(config, deps) {
         logDebug,
         model,
         log,
-        sessionLogLabel = 'Session created'
+        sessionLogLabel = 'Session created',
+        conversationKey = ''
     } = deps;
 
     const resolvedModel = await resolveRequestedModel(model);
@@ -54,18 +56,54 @@ export async function ensureModelSession(config, deps) {
         logDebug('Active model update skipped', { providerID, modelID });
     }
 
+    const reusable = getReusableSession(conversationKey, {
+        serverUrl: config.OPENCODE_SERVER_URL,
+        providerID,
+        modelID
+    });
+    if (reusable?.sessionId) {
+        if (log) {
+            log('Session reused', {
+                sessionId: reusable.sessionId,
+                model: `${providerID}/${modelID}`,
+                conversationKey
+            });
+        }
+        return {
+            resolvedModel,
+            providerID,
+            modelID,
+            sessionId: reusable.sessionId,
+            reused: true,
+            conversationKey
+        };
+    }
+
     const sessionRes = await client.session.create();
     const sessionId = sessionRes.data?.id;
     if (!sessionId) throw new Error('Failed to create OpenCode session');
+
+    if (conversationKey) {
+        rememberReusableSession(conversationKey, {
+            sessionId,
+            serverUrl: config.OPENCODE_SERVER_URL,
+            providerID,
+            modelID,
+            createdAt: Date.now()
+        });
+    }
+
     if (log) {
-        log(sessionLogLabel, { sessionId, model: `${providerID}/${modelID}` });
+        log(sessionLogLabel, { sessionId, model: `${providerID}/${modelID}`, ...(conversationKey ? { conversationKey } : {}) });
     }
 
     return {
         resolvedModel,
         providerID,
         modelID,
-        sessionId
+        sessionId,
+        reused: false,
+        conversationKey
     };
 }
 

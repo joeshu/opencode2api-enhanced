@@ -8,10 +8,22 @@ export function getUserFacingHint(errorLike) {
             hint: 'Authentication failed. Please check the API key configuration.'
         };
     }
+    if (type === 'rate_limit_error') {
+        return {
+            retryable: true,
+            hint: 'Too many requests are being processed at once. Please retry shortly.'
+        };
+    }
     if (type === 'upstream_tool_execution_error') {
         return {
             retryable: true,
             hint: 'The tool-enabled backend failed before producing a clean answer. Please retry or switch to stable mode.'
+        };
+    }
+    if (type === 'backend_not_ready_error') {
+        return {
+            retryable: true,
+            hint: 'The OpenCode backend is not ready yet. Check /health/ready or retry shortly.'
         };
     }
     if (type === 'upstream_connection_error' || message.includes('ECONNREFUSED') || message.includes('connect ')) {
@@ -20,7 +32,7 @@ export function getUserFacingHint(errorLike) {
             hint: 'The upstream backend may still be warming up or temporarily unavailable. Please retry shortly.'
         };
     }
-    if (type === 'upstream_timeout_error' || message.includes('Request timeout')) {
+    if (type === 'upstream_timeout_error' || message.includes('Request timeout') || message.includes('Timeout')) {
         return {
             retryable: true,
             hint: 'The request timed out. The model may be slow to respond or the network may be unstable.'

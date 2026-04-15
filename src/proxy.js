@@ -36,6 +36,7 @@ import { buildChatCompletionResponse, buildResponsesApiResponse } from './respon
 import { buildChatStreamChunk, buildChatStreamUsageChunk } from './stream-builders.js';
 import { buildToolStatusEvent } from './tool-status-builders.js';
 import { cleanupSessionLater } from './session-cleanup.js';
+import { extractConversationKey } from './session-store.js';
 import { sanitizeAssistantPayload, detectCorruptedUpstreamContent } from './output-sanitizer.js';
 import { buildResponsesCreatedEvent, buildResponsesMessageOutputAddedEvent, buildResponsesContentPartAddedEvent, buildResponsesReasoningOutputAddedEvent, buildResponsesReasoningDeltaEvent, buildResponsesTextDeltaEvent, buildResponsesReasoningDoneEvent, buildResponsesReasoningItemDoneEvent, buildResponsesTextDoneEvent, buildResponsesContentPartDoneEvent, buildResponsesMessageItemDoneEvent, buildResponsesCompletedEvent } from './responses-stream-builders.js';
 import { ensureModelSession, buildPromptParams } from './session-preparation.js';
@@ -170,6 +171,7 @@ export function createApp(config) {
     // Chat completions endpoint
 async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_MS) {
                 let sessionId = null;
+                let conversationKey = '';
                 let eventStream = null;
                 let stream = false;
                 let pID = 'opencode';
@@ -203,6 +205,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     };
 
                     log('Request params', { temperature: requestParams.temperature, max_tokens: requestParams.max_tokens, top_p: requestParams.top_p, reasoning_effort: reasoningLevel });
+                    conversationKey = extractConversationKey(req);
 
                     const prepared = await ensureModelSession(config, {
                         client,
@@ -218,6 +221,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         logDebug: (...args) => logDebug(...args),
                         model,
                         log,
+                        conversationKey,
                         sessionLogLabel: 'Session created'
                     });
                     pID = prepared.providerID;
@@ -620,7 +624,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         res.end();
                     }
                     if (sessionId) {
-                        cleanupSessionLater(client, sessionId);
+                        cleanupSessionLater(client, sessionId, 3000, conversationKey);
                     }
                 } finally {
                     if (typeof keepaliveInterval !== 'undefined' && keepaliveInterval) clearInterval(keepaliveInterval);
@@ -659,6 +663,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
         res.status(backend.ok ? 200 : 503).json({
             status,
             proxy: true,
+            mode: config.MANAGE_BACKEND ? 'managed-backend' : 'external-backend',
             backend,
             config: {
                 manageBackend: config.MANAGE_BACKEND,
@@ -676,15 +681,16 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
 
     app.get('/health/live', (req, res) => res.json({
         status: 'ok',
-        proxy: true
+        proxy: true,
+        mode: config.MANAGE_BACKEND ? 'managed-backend' : 'external-backend'
     }));
 
     app.get('/health/ready', async (req, res) => {
         const backend = await getBackendHealthStatus(OPENCODE_SERVER_URL, OPENCODE_SERVER_PASSWORD);
         if (backend.ok) {
-            return res.json({ status: 'ready', ready: true, backend });
+            return res.json({ status: 'ready', ready: true, mode: config.MANAGE_BACKEND ? 'managed-backend' : 'external-backend', backend });
         }
-        return res.status(503).json({ status: backend.isStarting ? 'starting' : 'not_ready', ready: false, backend });
+        return res.status(503).json({ status: backend.isStarting ? 'starting' : 'not_ready', ready: false, mode: config.MANAGE_BACKEND ? 'managed-backend' : 'external-backend', backend });
     });
 
     app.post('/v1/responses', async (req, res) => {
@@ -728,6 +734,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 input,
                 instructions
             });
+            const conversationKey = extractConversationKey(req);
 
             if (!messages.length) {
                 log('Responses request rejected', { reason: 'input is required' });
@@ -748,6 +755,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 logDebug: (...args) => logDebug(...args),
                 model,
                 log,
+                conversationKey,
                 sessionLogLabel: 'Responses session created'
             });
             const pID = prepared.providerID;
@@ -977,7 +985,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         }
                     }));
                     res.write('data: [DONE]\n\n');
-                    cleanupSessionLater(client, sessionId);
+                    cleanupSessionLater(client, sessionId, 3000, conversationKey);
                     return res.end();
                 }
 
@@ -991,9 +999,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 });
                 emit(buildResponsesCompletedEvent({ sequenceNumber: nextSeq(), response }));
                 res.write('data: [DONE]\n\n');
-                try {
-                    await client.session.delete({ path: { id: sessionId } });
-                } catch (e) { }
+                cleanupSessionLater(client, sessionId, 3000, conversationKey);
                 return res.end();
             }
 
@@ -1012,7 +1018,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
 
             const sanitized = sanitizeAssistantPayload({ content, reasoning });
             if (sanitized.corrupted) {
-                cleanupSessionLater(client, sessionId);
+                cleanupSessionLater(client, sessionId, 3000, conversationKey);
                 return res.status(502).json({ error: sanitized.error });
             }
 
@@ -1024,7 +1030,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 fullPromptText
             });
 
-            cleanupSessionLater(client, sessionId);
+            cleanupSessionLater(client, sessionId, 3000, conversationKey);
 
             return res.json(response);
             });
