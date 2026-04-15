@@ -72,3 +72,73 @@ export function buildResponsesTextDeltaEvent({ sequenceNumber, outputIndex, cont
         delta
     };
 }
+
+export function buildResponsesReasoningDoneEvent({ sequenceNumber, outputIndex, itemId, text }) {
+    return {
+        type: 'response.reasoning_summary_text.done',
+        sequence_number: sequenceNumber,
+        output_index: outputIndex,
+        item_id: itemId,
+        summary_index: 0,
+        text
+    };
+}
+
+export function buildResponsesReasoningItemDoneEvent({ sequenceNumber, outputIndex, itemId, text }) {
+    return {
+        type: 'response.output_item.done',
+        sequence_number: sequenceNumber,
+        output_index: outputIndex,
+        item: {
+            id: itemId,
+            type: 'reasoning',
+            status: 'completed',
+            summary: [{ type: 'summary_text', text }]
+        }
+    };
+}
+
+export function buildResponsesTextDoneEvent({ sequenceNumber, outputIndex, contentIndex, itemId, text }) {
+    return {
+        type: 'response.output_text.done',
+        sequence_number: sequenceNumber,
+        output_index: outputIndex,
+        content_index: contentIndex,
+        item_id: itemId,
+        text
+    };
+}
+
+export function buildResponsesContentPartDoneEvent({ sequenceNumber, outputIndex, contentIndex, itemId, text }) {
+    return {
+        type: 'response.content_part.done',
+        sequence_number: sequenceNumber,
+        output_index: outputIndex,
+        content_index: contentIndex,
+        item_id: itemId,
+        part: { type: 'output_text', text }
+    };
+}
+
+export function buildResponsesMessageItemDoneEvent({ sequenceNumber, outputIndex, itemId, text }) {
+    return {
+        type: 'response.output_item.done',
+        sequence_number: sequenceNumber,
+        output_index: outputIndex,
+        item: {
+            id: itemId,
+            type: 'message',
+            status: 'completed',
+            role: 'assistant',
+            content: [{ type: 'output_text', text }]
+        }
+    };
+}
+
+export function buildResponsesCompletedEvent({ sequenceNumber, response }) {
+    return {
+        type: 'response.completed',
+        sequence_number: sequenceNumber,
+        response
+    };
+}

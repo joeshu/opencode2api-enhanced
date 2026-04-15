@@ -33,7 +33,7 @@ import { createServerRuntime } from './server-runtime.js';
 import { buildStartProxyConfig } from './start-proxy-config.js';
 import { buildChatCompletionResponse, buildResponsesApiResponse } from './response-builders.js';
 import { buildChatStreamChunk, buildChatStreamUsageChunk } from './stream-builders.js';
-import { buildResponsesCreatedEvent, buildResponsesMessageOutputAddedEvent, buildResponsesContentPartAddedEvent, buildResponsesReasoningOutputAddedEvent, buildResponsesReasoningDeltaEvent, buildResponsesTextDeltaEvent } from './responses-stream-builders.js';
+import { buildResponsesCreatedEvent, buildResponsesMessageOutputAddedEvent, buildResponsesContentPartAddedEvent, buildResponsesReasoningOutputAddedEvent, buildResponsesReasoningDeltaEvent, buildResponsesTextDeltaEvent, buildResponsesReasoningDoneEvent, buildResponsesReasoningItemDoneEvent, buildResponsesTextDoneEvent, buildResponsesContentPartDoneEvent, buildResponsesMessageItemDoneEvent, buildResponsesCompletedEvent } from './responses-stream-builders.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 registerProcessCleanup();
@@ -864,56 +864,41 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 }
 
                 if (announcedReasoning) {
-                    emit({
-                        type: 'response.reasoning_summary_text.done',
-                        sequence_number: nextSeq(),
-                        output_index: reasoningOutputIndex,
-                        item_id: reasoningItemId,
-                        summary_index: 0,
+                    emit(buildResponsesReasoningDoneEvent({
+                        sequenceNumber: nextSeq(),
+                        outputIndex: reasoningOutputIndex,
+                        itemId: reasoningItemId,
                         text: reasoning
-                    });
-                    emit({
-                        type: 'response.output_item.done',
-                        sequence_number: nextSeq(),
-                        output_index: reasoningOutputIndex,
-                        item: {
-                            id: reasoningItemId,
-                            type: 'reasoning',
-                            status: 'completed',
-                            summary: [{ type: 'summary_text', text: reasoning }]
-                        }
-                    });
+                    }));
+                    emit(buildResponsesReasoningItemDoneEvent({
+                        sequenceNumber: nextSeq(),
+                        outputIndex: reasoningOutputIndex,
+                        itemId: reasoningItemId,
+                        text: reasoning
+                    }));
                 }
 
                 if (announcedContent) {
-                    emit({
-                        type: 'response.output_text.done',
-                        sequence_number: nextSeq(),
-                        output_index: messageOutputIndex,
-                        content_index: contentIndex,
-                        item_id: outputItemId,
+                    emit(buildResponsesTextDoneEvent({
+                        sequenceNumber: nextSeq(),
+                        outputIndex: messageOutputIndex,
+                        contentIndex: contentIndex,
+                        itemId: outputItemId,
                         text: content
-                    });
-                    emit({
-                        type: 'response.content_part.done',
-                        sequence_number: nextSeq(),
-                        output_index: messageOutputIndex,
-                        content_index: contentIndex,
-                        item_id: outputItemId,
-                        part: { type: 'output_text', text: content }
-                    });
-                    emit({
-                        type: 'response.output_item.done',
-                        sequence_number: nextSeq(),
-                        output_index: messageOutputIndex,
-                        item: {
-                            id: outputItemId,
-                            type: 'message',
-                            status: 'completed',
-                            role: 'assistant',
-                            content: [{ type: 'output_text', text: content }]
-                        }
-                    });
+                    }));
+                    emit(buildResponsesContentPartDoneEvent({
+                        sequenceNumber: nextSeq(),
+                        outputIndex: messageOutputIndex,
+                        contentIndex: contentIndex,
+                        itemId: outputItemId,
+                        text: content
+                    }));
+                    emit(buildResponsesMessageItemDoneEvent({
+                        sequenceNumber: nextSeq(),
+                        outputIndex: messageOutputIndex,
+                        itemId: outputItemId,
+                        text: content
+                    }));
                 }
 
                 const response = buildResponsesApiResponse({
@@ -924,7 +909,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     reasoningLevel,
                     fullPromptText
                 });
-                emit({ type: 'response.completed', sequence_number: nextSeq(), response });
+                emit(buildResponsesCompletedEvent({ sequenceNumber: nextSeq(), response }));
                 res.write('data: [DONE]\n\n');
                 try {
                     await client.session.delete({ path: { id: sessionId } });
