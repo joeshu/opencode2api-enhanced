@@ -41,6 +41,7 @@ import { sanitizeAssistantPayload, detectCorruptedUpstreamContent } from './outp
 import { buildResponsesCreatedEvent, buildResponsesMessageOutputAddedEvent, buildResponsesContentPartAddedEvent, buildResponsesReasoningOutputAddedEvent, buildResponsesReasoningDeltaEvent, buildResponsesTextDeltaEvent, buildResponsesReasoningDoneEvent, buildResponsesReasoningItemDoneEvent, buildResponsesTextDoneEvent, buildResponsesContentPartDoneEvent, buildResponsesMessageItemDoneEvent, buildResponsesCompletedEvent } from './responses-stream-builders.js';
 import { ensureModelSession, buildPromptParams } from './session-preparation.js';
 import { createLatencyTracker } from './latency-tracker.js';
+import { getLatencySummary } from './latency-summary.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 registerProcessCleanup();
@@ -546,6 +547,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         }))}\n\n`);
                         emitToolStatus('completed', 'Tool-enabled generation completed');
                         res.write('data: [DONE]\n\n');
+                        latency.finalize({ sessionId, model: `${pID}/${mID}`, via: 'stream' });
                         res.end();
                     } else {
                         const promptSentAt = Date.now();
@@ -593,6 +595,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         });
 
                         res.json(built.body);
+                        latency.finalize({ sessionId, model: `${pID}/${mID}`, via: 'non_stream_prompt_result' });
                         log('Request complete', {
                             sessionId,
                             phase: 'non-stream',
@@ -690,6 +693,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
             proxy: true,
             mode: config.MANAGE_BACKEND ? 'managed-backend' : 'external-backend',
             backend,
+            latency: getLatencySummary(),
             config: {
                 manageBackend: config.MANAGE_BACKEND,
                 disableTools: DISABLE_TOOLS,
@@ -1037,6 +1041,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 });
                 emit(buildResponsesCompletedEvent({ sequenceNumber: nextSeq(), response }));
                 res.write('data: [DONE]\n\n');
+                latency.finalize({ sessionId, model: `${pID}/${mID}`, via: 'stream' });
                 cleanupSessionLater(client, sessionId, 3000, conversationKey);
                 return res.end();
             }
@@ -1073,6 +1078,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
             });
 
             cleanupSessionLater(client, sessionId, 3000, conversationKey);
+            latency.finalize({ sessionId, model: `${pID}/${mID}`, via: 'non_stream_response' });
 
             return res.json(response);
             });
