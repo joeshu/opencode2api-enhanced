@@ -5,7 +5,7 @@ export function extractFromParts(parts) {
     return { content, reasoning };
 }
 
-export async function pollForAssistantResponse(client, logDebug, sleep, sessionId, timeoutMs, intervalMs) {
+export async function pollForAssistantResponse(client, logDebug, sleep, sessionId, timeoutMs, intervalMs, minMessageRank = 0) {
     const pollStart = Date.now();
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
@@ -16,6 +16,8 @@ export async function pollForAssistantResponse(client, logDebug, sleep, sessionI
                 const entry = messages[i];
                 const info = entry?.info;
                 if (info?.role !== 'assistant') continue;
+                const messageRank = info?.time?.completed || info?.time?.created || i;
+                if (minMessageRank && messageRank < minMessageRank) continue;
                 const { content, reasoning } = extractFromParts(entry?.parts || []);
                 const error = info?.error || null;
                 const done = Boolean(info.finish || info.time?.completed || error);
@@ -29,15 +31,17 @@ export async function pollForAssistantResponse(client, logDebug, sleep, sessionI
                         done,
                         contentLen: content.length,
                         reasoningLen: reasoning.length,
-                        error: error ? error.name : null
+                        error: error ? error.name : null,
+                        messageRank,
+                        minMessageRank
                     });
-                    return { content, reasoning, error };
+                    return { content, reasoning, error, messageRank };
                 }
             }
         }
         await sleep(intervalMs);
     }
-    logDebug('Polling timeout', { sessionId, ms: Date.now() - pollStart });
+    logDebug('Polling timeout', { sessionId, ms: Date.now() - pollStart, minMessageRank });
     throw new Error(`poll_response_timeout after ${timeoutMs}ms`);
 }
 

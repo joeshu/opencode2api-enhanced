@@ -527,6 +527,12 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             }))}\n\n`);
                         }
 
+                        res.write(`data: ${JSON.stringify(buildChatStreamChunk({
+                            id,
+                            model: `${pID}/${mID}`,
+                            finishReason: 'stop'
+                        }))}\n\n`);
+
                         if (keepaliveInterval) clearInterval(keepaliveInterval);
                         
                         const promptTokens = Math.ceil((fullPromptText || '').length / 4);
@@ -542,10 +548,28 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         res.write('data: [DONE]\n\n');
                         res.end();
                     } else {
-                        await promptWithTimeout(client, (...args) => logDebug(...args), sleep, promptParams, REQUEST_TIMEOUT_MS);
+                        const promptSentAt = Date.now();
+                        const promptResult = await promptWithTimeout(client, (...args) => logDebug(...args), sleep, promptParams, REQUEST_TIMEOUT_MS);
                         log('Prompt sent', { sessionId, phase: 'non-stream' });
                         latency.checkpoint('prompt_sent', { model: `${pID}/${mID}`, sessionId, stream: false });
-                        const { content, reasoning, error } = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS);
+
+                        let content = '';
+                        let reasoning = '';
+                        const promptParts = promptResult?.data?.parts || promptResult?.parts || [];
+                        if (Array.isArray(promptParts) && promptParts.length) {
+                            content = promptParts.filter((part) => part.type === 'text').map((part) => part.text || '').join('\n');
+                            reasoning = promptParts.filter((part) => part.type === 'reasoning').map((part) => part.text || '').join('\n');
+                            latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, via: 'non_stream_prompt_result' });
+                        }
+
+                        let error = null;
+                        if (!content && !reasoning) {
+                            const polled = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, promptSentAt);
+                            content = polled.content || '';
+                            reasoning = polled.reasoning || '';
+                            error = polled.error || null;
+                        }
+
                         if (error && !content && !reasoning) {
                             return res.status(502).json({
                                 error: {
@@ -934,6 +958,10 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 } else if (collected && (collected.content || collected.reasoning)) {
                     if (!reasoning && collected.reasoning) sendResponsesDelta(collected.reasoning, true);
                     if (!content && collected.content) sendResponsesDelta(collected.content, false);
+                }
+
+                if (!announcedOutput) {
+                    ensureOutputScaffold();
                 }
 
                 if (announcedReasoning) {

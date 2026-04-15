@@ -193,19 +193,17 @@ const backendServer = http.createServer(async (req, res) => {
         current.reasoningText = 'Mock reasoning path';
       }
       sessionStore.set(sessionId, current);
-      if (process.env.SMOKE_DEBUG === '1') {
-        console.log('[SMOKE_BACKEND] get-state', sessionId, JSON.stringify({ responseText: current.responseText, reasoningText: current.reasoningText, messageFetchCount: current.messageFetchCount }));
-      }
       if (current.messageFetchCount === 1) {
-        return sendJson(res, 200, {
+        return sendJson(res, 200, [{
+          info: { role: 'assistant', finish: 'stop', time: { completed: Date.now() } },
           parts: [
             ...(current.reasoningText ? [{ type: 'reasoning', text: current.reasoningText }] : []),
             { type: 'text', text: current.responseText }
           ]
-        });
+        }]);
       }
       return sendJson(res, 200, [{
-        info: { role: 'assistant', finish: 'stop' },
+        info: { role: 'assistant', finish: 'stop', time: { completed: Date.now() } },
         parts: [
           ...(current.reasoningText ? [{ type: 'reasoning', text: current.reasoningText }] : []),
           { type: 'text', text: current.responseText }
@@ -304,7 +302,8 @@ async function main() {
       conversation_id: 'smoke_reuse_conv'
     }, {
       Authorization: `Bearer ${apiKey}`,
-      'x-request-id': 'smoke_reuse_second'
+      'x-request-id': 'smoke_reuse_second',
+      'x-opencode-session-key': 'smoke_reuse_conv'
     });
     const reuseSecondBody = parseBody(reuseSecond);
     if (process.env.SMOKE_DEBUG === '1') {

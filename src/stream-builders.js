@@ -4,7 +4,7 @@ export function buildChatStreamChunk({ id, model, content, finishReason = null }
         object: 'chat.completion.chunk',
         created: Math.floor(Date.now() / 1000),
         model,
-        choices: [{ index: 0, delta: { content }, finish_reason: finishReason }]
+        choices: [{ index: 0, delta: content ? { content } : {}, finish_reason: finishReason }]
     };
 }
 

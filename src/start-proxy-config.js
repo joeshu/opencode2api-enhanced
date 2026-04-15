@@ -58,6 +58,10 @@ export function buildStartProxyConfig(options) {
         (disableTools ? 'off' : 'full')
     ).trim().toLowerCase();
 
+    const promptMode = options.PROMPT_MODE || options.promptMode || process.env.OPENCODE_PROXY_PROMPT_MODE || 'standard';
+    const cleanupIntervalMs = Number(options.CLEANUP_INTERVAL_MS || process.env.OPENCODE_PROXY_CLEANUP_INTERVAL_MS || 12 * 60 * 60 * 1000);
+    const cleanupMaxAgeMs = Number(options.CLEANUP_MAX_AGE_MS || process.env.OPENCODE_PROXY_CLEANUP_MAX_AGE_MS || 24 * 60 * 60 * 1000);
+
     return {
         PORT: options.PORT || 10000,
         API_KEY: options.API_KEY || '',
