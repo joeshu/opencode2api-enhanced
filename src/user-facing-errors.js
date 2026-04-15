@@ -8,6 +8,12 @@ export function getUserFacingHint(errorLike) {
             hint: 'Authentication failed. Please check the API key configuration.'
         };
     }
+    if (type === 'upstream_tool_execution_error') {
+        return {
+            retryable: true,
+            hint: 'The tool-enabled backend failed before producing a clean answer. Please retry or switch to stable mode.'
+        };
+    }
     if (type === 'upstream_connection_error' || message.includes('ECONNREFUSED') || message.includes('connect ')) {
         return {
             retryable: true,
@@ -30,6 +36,12 @@ export function getUserFacingHint(errorLike) {
         return {
             retryable: false,
             hint: 'The request payload is invalid or contains unsupported media.'
+        };
+    }
+    if (message.includes('warming up') || message.includes('not ready')) {
+        return {
+            retryable: true,
+            hint: 'The backend is still warming up. Please wait a moment and retry.'
         };
     }
     return {
