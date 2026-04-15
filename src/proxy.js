@@ -34,6 +34,8 @@ import { getUserFacingHint } from './user-facing-errors.js';
 import { buildStartProxyConfig } from './start-proxy-config.js';
 import { buildChatCompletionResponse, buildResponsesApiResponse } from './response-builders.js';
 import { buildChatStreamChunk, buildChatStreamUsageChunk } from './stream-builders.js';
+import { cleanupSessionLater } from './session-cleanup.js';
+import { sanitizeAssistantPayload } from './output-sanitizer.js';
 import { buildResponsesCreatedEvent, buildResponsesMessageOutputAddedEvent, buildResponsesContentPartAddedEvent, buildResponsesReasoningOutputAddedEvent, buildResponsesReasoningDeltaEvent, buildResponsesTextDeltaEvent, buildResponsesReasoningDoneEvent, buildResponsesReasoningItemDoneEvent, buildResponsesTextDoneEvent, buildResponsesContentPartDoneEvent, buildResponsesMessageItemDoneEvent, buildResponsesCompletedEvent } from './responses-stream-builders.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -393,7 +395,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                 logDebug('Client disconnected before fallback', { sessionId });
                                 return;
                             }
-                            logDebug('Fallback to polling (stream)', { sessionId });
+                            logDebug('Fallback to polling after no SSE data', { sessionId, suspectedUpstreamIssue: true });
                             const { content, reasoning, error } = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS);
                             if (error && !content && !reasoning) {
                                 sendDelta(`[Proxy Error] ${error.name || 'OpenCodeError'}: ${error.data?.message || error.message || 'Unknown error'}`);
@@ -408,7 +410,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                 logDebug('Client disconnected before fallback', { sessionId });
                                 return;
                             }
-                            logDebug('SSE idle timeout, polling for completion', { sessionId });
+                            logDebug('SSE idle timeout, polling for completion', { sessionId, suspectedUpstreamIssue: !collected.receivedDelta });
                             const { content, reasoning, error } = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS);
                             if (error && !content && !reasoning) {
                                 sendDelta(`[Proxy Error] ${error.name || 'OpenCodeError'}: ${error.data?.message || error.message || 'Unknown error'}`);
@@ -440,7 +442,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                 logDebug('Client disconnected before fallback', { sessionId });
                                 return;
                             }
-                            logDebug('SSE returned empty, falling back to polling', { sessionId });
+                            logDebug('SSE returned empty, falling back to polling', { sessionId, suspectedUpstreamIssue: true });
                             try {
                                 const pollResult = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS);
                                 const { content: pollContent, reasoning: pollReasoning, error } = pollResult;
@@ -510,11 +512,15 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         }
                         const safeContent = stripFunctionCalls(content, true, DISABLE_TOOLS);
                         const safeReasoning = stripFunctionCalls(reasoning, true, DISABLE_TOOLS);
+                        const sanitized = sanitizeAssistantPayload({ content: safeContent, reasoning: safeReasoning });
+                        if (sanitized.corrupted) {
+                            return res.status(502).json({ error: sanitized.error });
+                        }
 
                         const built = buildChatCompletionResponse({
                             model: `${pID}/${mID}`,
-                            content: safeContent,
-                            reasoning: safeReasoning,
+                            content: sanitized.content,
+                            reasoning: sanitized.reasoning,
                             fullPromptText
                         });
 
@@ -575,11 +581,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         res.end();
                     }
                     if (sessionId) {
-                        try {
-                            await client.session.delete({ path: { id: sessionId } });
-                        } catch (e) {
-                            console.error('[Proxy] Failed to cleanup session on error:', e.message);
-                        }
+                        cleanupSessionLater(client, sessionId);
                     }
                 } finally {
                     if (typeof keepaliveInterval !== 'undefined' && keepaliveInterval) clearInterval(keepaliveInterval);
@@ -908,11 +910,28 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     }));
                 }
 
+                const sanitized = sanitizeAssistantPayload({ content, reasoning });
+                if (sanitized.corrupted) {
+                    emit(buildResponsesCompletedEvent({
+                        sequenceNumber: nextSeq(),
+                        response: {
+                            id: responseId,
+                            object: 'response',
+                            created: Math.floor(Date.now() / 1000),
+                            model: `${pID}/${mID}`,
+                            error: sanitized.error
+                        }
+                    }));
+                    res.write('data: [DONE]\n\n');
+                    cleanupSessionLater(client, sessionId);
+                    return res.end();
+                }
+
                 const response = buildResponsesApiResponse({
                     id: responseId,
                     model: `${pID}/${mID}`,
-                    content,
-                    reasoning,
+                    content: sanitized.content,
+                    reasoning: sanitized.reasoning,
                     reasoningLevel,
                     fullPromptText
                 });
@@ -935,17 +954,21 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 content = typeof data === 'string' ? data : data?.message || JSON.stringify(data);
             }
 
+            const sanitized = sanitizeAssistantPayload({ content, reasoning });
+            if (sanitized.corrupted) {
+                cleanupSessionLater(client, sessionId);
+                return res.status(502).json({ error: sanitized.error });
+            }
+
             const response = buildResponsesApiResponse({
                 model: `${pID}/${mID}`,
-                content,
-                reasoning,
+                content: sanitized.content,
+                reasoning: sanitized.reasoning,
                 reasoningLevel,
                 fullPromptText
             });
 
-            try {
-                await client.session.delete({ path: { id: sessionId } });
-            } catch (e) { }
+            cleanupSessionLater(client, sessionId);
 
             return res.json(response);
             });

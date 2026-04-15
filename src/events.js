@@ -131,14 +131,16 @@ export async function collectFromEvents(client, logDebug, sessionId, timeoutMs, 
                             clearTimeout(timeoutId);
                             if (firstDeltaTimer) clearTimeout(firstDeltaTimer);
                             if (idleTimer) clearTimeout(idleTimer);
-                            logDebug('SSE completed', {
+                            const emptyCompleted = deltaChars === 0 && content.length === 0 && reasoning.length === 0;
+                            logDebug(emptyCompleted ? 'SSE completed without payload' : 'SSE completed', {
                                 sessionId,
                                 ms: Date.now() - startedAt,
                                 deltaChars,
                                 finalContentLen: content.length,
-                                finalReasoningLen: reasoning.length
+                                finalReasoningLen: reasoning.length,
+                                emptyCompleted
                             });
-                            resolve({ content, reasoning });
+                            resolve({ content, reasoning, emptyCompleted });
                         }
                         break;
                     }
