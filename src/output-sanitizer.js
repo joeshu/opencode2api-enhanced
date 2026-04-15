@@ -13,7 +13,15 @@ const SUSPICIOUS_PATTERNS = [
     /<\/parameter>/i,
     /<tool_call>/i,
     /<function>/i,
-    /<parameter>/i
+    /<parameter>/i,
+    /let'?s craft our final response/i,
+    /we can now consider the task complete/i,
+    /we'?ll respond with a summary/i,
+    /final response:/i,
+    /the user said .* which means/i,
+    /however, we must not output/i,
+    /we can end there/i,
+    /we have created:/i
 ];
 
 export function detectCorruptedUpstreamContent(text) {
