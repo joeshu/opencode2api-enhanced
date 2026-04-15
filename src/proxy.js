@@ -30,6 +30,7 @@ import { buildChatPromptParts, normalizeResponsesMessages } from './message-orch
 import { promptWithTimeout } from './prompt-executor.js';
 import { cleanupConversationFiles, registerConversationCleanup } from './conversation-cleanup.js';
 import { createServerRuntime } from './server-runtime.js';
+import { getUserFacingHint } from './user-facing-errors.js';
 import { buildStartProxyConfig } from './start-proxy-config.js';
 import { buildChatCompletionResponse, buildResponsesApiResponse } from './response-builders.js';
 import { buildChatStreamChunk, buildChatStreamUsageChunk } from './stream-builders.js';
@@ -114,7 +115,7 @@ export function createApp(config) {
         if (API_KEY && API_KEY.trim() !== '') {
             const authHeader = req.headers.authorization;
             if (!authHeader || authHeader !== `Bearer ${API_KEY}`) {
-                return res.status(401).json({ error: { message: 'Unauthorized' } });
+                return res.status(401).json({ error: { message: 'Unauthorized', type: 'authentication_error', retryable: false, hint: 'Authentication failed. Please check the API key configuration.' } });
             }
         }
         next();
@@ -559,10 +560,13 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         if (error.message && error.message.includes('ENOENT')) {
                             errorMessage = 'OpenCode backend file access error. This may be a Windows compatibility issue. Please try restarting the service.';
                         }
+                        const userHint = getUserFacingHint({ code: error.code, message: errorMessage });
                         res.status(statusCode).json({
                             error: {
                                 message: errorMessage,
                                 type: error.code || error.constructor.name,
+                                retryable: userHint.retryable,
+                                hint: userHint.hint,
                                 ...(error.availableModels && { available_models: error.availableModels })
                             }
                         });
@@ -593,10 +597,13 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
             const normalizedError = normalizeProxyError(error);
             console.error('[Proxy] Request Handler Error:', normalizedError.message);
             if (!res.headersSent) {
+                const userHint = getUserFacingHint(normalizedError);
                 res.status(normalizedError.statusCode || 500).json({
                     error: {
                         message: normalizedError.message,
                         type: normalizedError.code || normalizedError.constructor.name,
+                        retryable: userHint.retryable,
+                        hint: userHint.hint,
                         ...(normalizedError.availableModels && { available_models: normalizedError.availableModels })
                     }
                 });
@@ -945,10 +952,13 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
         } catch (error) {
             console.error('[Proxy] Responses API Error:', error.message);
             const normalizedError = normalizeProxyError(error);
+            const userHint = getUserFacingHint(normalizedError);
             res.status(normalizedError.statusCode || 500).json({ 
                 error: { 
                     message: normalizedError.message,
                     type: normalizedError.code || normalizedError.constructor.name,
+                    retryable: userHint.retryable,
+                    hint: userHint.hint,
                     ...(normalizedError.availableModels && { available_models: normalizedError.availableModels })
                 } 
             });

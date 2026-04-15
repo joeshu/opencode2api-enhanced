@@ -1,0 +1,39 @@
+export function getUserFacingHint(errorLike) {
+    const type = errorLike?.code || errorLike?.type || '';
+    const message = errorLike?.message || '';
+
+    if (type === 'authentication_error' || message.includes('Unauthorized')) {
+        return {
+            retryable: false,
+            hint: 'Authentication failed. Please check the API key configuration.'
+        };
+    }
+    if (type === 'upstream_connection_error' || message.includes('ECONNREFUSED') || message.includes('connect ')) {
+        return {
+            retryable: true,
+            hint: 'The upstream backend may still be warming up or temporarily unavailable. Please retry shortly.'
+        };
+    }
+    if (type === 'upstream_timeout_error' || message.includes('Request timeout')) {
+        return {
+            retryable: true,
+            hint: 'The request timed out. The model may be slow to respond or the network may be unstable.'
+        };
+    }
+    if (type === 'model_not_found') {
+        return {
+            retryable: false,
+            hint: 'The requested model is unavailable. Refresh the model list or switch to another model.'
+        };
+    }
+    if (type === 'invalid_request_error' || type === 'invalid_image_url' || type === 'image_too_large') {
+        return {
+            retryable: false,
+            hint: 'The request payload is invalid or contains unsupported media.'
+        };
+    }
+    return {
+        retryable: true,
+        hint: 'The request failed. Please retry. If the problem persists, check backend readiness and network stability.'
+    };
+}
