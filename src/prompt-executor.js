@@ -4,7 +4,7 @@ export async function promptWithTimeout(client, logDebug, sleep, promptParams, t
             const timeoutPromise = new Promise((_, reject) => {
                 setTimeout(() => reject(new Error(`prompt_send_timeout after ${timeoutMs}ms`)), timeoutMs);
             });
-            return Promise.race([client.session.prompt(promptParams), timeoutPromise]);
+            return await Promise.race([client.session.prompt(promptParams), timeoutPromise]);
         } catch (err) {
             if (retriesLeft > 0 && (err.message.includes('timeout') || err.message.includes('network') || err.message.includes('ECONNREFUSED'))) {
                 logDebug('Prompt failed, retrying', { retriesLeft, error: err.message });
