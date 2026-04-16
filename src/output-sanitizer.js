@@ -32,6 +32,30 @@ const SUSPICIOUS_PATTERNS = [
     /^i can (help|reply|suggest|offer)/im
 ];
 
+const LEAKED_REASONING_PREFIX_PATTERNS = [
+    /^the user (is asking|asks|wants|said)/i,
+    /^this is a simple/i,
+    /^i should /i,
+    /^we need to /i,
+    /^用户要求/i,
+    /^用户想让我/i,
+    /^这是一个简单/i,
+    /^我需要/i,
+    /^上一轮/i
+];
+
+const LEAKED_REASONING_EXPLANATION_PATTERNS = [
+    /\n\n/,
+    /which means/i,
+    /according to/i,
+    /based on the conversation/i,
+    /这是一个简单/i,
+    /这个问题/i,
+    /根据对话/i,
+    /用户的指令/i
+];
+
+
 export function detectCorruptedUpstreamContent(text) {
     const value = String(text || '');
     if (!value.trim()) return false;
@@ -63,7 +87,7 @@ export function stripLeakedReasoningPreamble(text) {
         /\n\nHello[!.]/,
         /\n\nHi there[!.]/,
         /\n\nHi[!.]/,
-        /\n\n我/, 
+        /\n\n我/,
         /\n\n你好/,
         /\n\nHello! /,
         /\n\nHi there. /
@@ -75,4 +99,33 @@ export function stripLeakedReasoningPreamble(text) {
         }
     }
     return value;
+}
+
+export function splitLeakedReasoningPrefix(text) {
+    const value = String(text || '');
+    if (!value.trim()) return { reasoningPrefix: '', contentRemainder: value };
+
+    const normalized = value.replace(/^\s+/, '');
+    const separators = ['\n\n', '\n\n\n'];
+    for (const separator of separators) {
+        const idx = normalized.lastIndexOf(separator);
+        if (idx <= 0) continue;
+        const prefix = normalized.slice(0, idx).trim();
+        const suffix = normalized.slice(idx + separator.length).trim();
+        if (!prefix || !suffix) continue;
+        if (LEAKED_REASONING_PREFIX_PATTERNS.some((pattern) => pattern.test(prefix))) {
+            return {
+                reasoningPrefix: prefix,
+                contentRemainder: suffix
+            };
+        }
+    }
+
+    return { reasoningPrefix: '', contentRemainder: value };
+}
+
+export function looksLikeLeakedReasoningPrefix(text) {
+    const value = String(text || '').trimStart();
+    if (!value) return false;
+    return LEAKED_REASONING_PREFIX_PATTERNS.some((pattern) => pattern.test(value));
 }

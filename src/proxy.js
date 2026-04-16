@@ -37,7 +37,7 @@ import { buildChatStreamChunk, buildChatReasoningChunk, buildChatStreamUsageChun
 import { buildToolStatusEvent } from './tool-status-builders.js';
 import { cleanupSessionLater } from './session-cleanup.js';
 import { extractConversationKey } from './session-store.js';
-import { sanitizeAssistantPayload, detectCorruptedUpstreamContent, stripLeakedReasoningPreamble } from './output-sanitizer.js';
+import { sanitizeAssistantPayload, detectCorruptedUpstreamContent, stripLeakedReasoningPreamble, splitLeakedReasoningPrefix, looksLikeLeakedReasoningPrefix } from './output-sanitizer.js';
 import { buildResponsesCreatedEvent, buildResponsesMessageOutputAddedEvent, buildResponsesContentPartAddedEvent, buildResponsesReasoningOutputAddedEvent, buildResponsesReasoningDeltaEvent, buildResponsesTextDeltaEvent, buildResponsesReasoningDoneEvent, buildResponsesReasoningItemDoneEvent, buildResponsesTextDoneEvent, buildResponsesContentPartDoneEvent, buildResponsesMessageItemDoneEvent, buildResponsesCompletedEvent } from './responses-stream-builders.js';
 import { ensureModelSession, buildPromptParams } from './session-preparation.js';
 import { createLatencyTracker } from './latency-tracker.js';
@@ -830,6 +830,10 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 temperature,
                 top_p
             });
+            const toolOverrides = await getToolOverrides();
+            if (toolOverrides && Object.keys(toolOverrides).length > 0) {
+                promptParams.body.tools = toolOverrides;
+            }
 
             const toolsActuallyEnabled = !DISABLE_TOOLS && TOOL_POLICY !== 'off';
             let content = '';
@@ -871,6 +875,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
 
                 const filterContentDelta = createToolCallFilter(DISABLE_TOOLS);
                 const filterReasoningDelta = createToolCallFilter(DISABLE_TOOLS);
+                let pendingReasoningLikeContent = '';
                 const ensureOutputScaffold = () => {
                     if (!announcedOutput) {
                         emit(buildResponsesMessageOutputAddedEvent({
@@ -900,6 +905,31 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         announcedReasoning = true;
                     }
                 };
+                const flushPendingReasoningLikeContentAsText = () => {
+                    if (!pendingReasoningLikeContent) return;
+                    ensureOutputScaffold();
+                    content += pendingReasoningLikeContent;
+                    emit(buildResponsesTextDeltaEvent({
+                        sequenceNumber: nextSeq(),
+                        outputIndex: messageOutputIndex,
+                        contentIndex: contentIndex,
+                        itemId: outputItemId,
+                        delta: pendingReasoningLikeContent
+                    }));
+                    pendingReasoningLikeContent = '';
+                };
+                const flushPendingReasoningLikeContentAsReasoning = () => {
+                    if (!pendingReasoningLikeContent) return;
+                    ensureReasoningScaffold();
+                    reasoning += pendingReasoningLikeContent.trim();
+                    emit(buildResponsesReasoningDeltaEvent({
+                        sequenceNumber: nextSeq(),
+                        outputIndex: reasoningOutputIndex,
+                        itemId: reasoningItemId,
+                        delta: pendingReasoningLikeContent.trim()
+                    }));
+                    pendingReasoningLikeContent = '';
+                };
                 const sendResponsesDelta = (delta, isReasoning = false) => {
                     if (!delta) return;
                     const filtered = isReasoning ? filterReasoningDelta(delta) : filterContentDelta(delta);
@@ -922,6 +952,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     }
                     latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, isReasoning });
                     if (isReasoning) {
+                        flushPendingReasoningLikeContentAsReasoning();
                         ensureReasoningScaffold();
                         reasoning += filtered;
                         emit(buildResponsesReasoningDeltaEvent({
@@ -931,6 +962,34 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             delta: filtered
                         }));
                     } else {
+                        const combinedCandidate = `${pendingReasoningLikeContent}${filtered}`;
+                        const split = splitLeakedReasoningPrefix(combinedCandidate);
+                        if (split.reasoningPrefix && split.contentRemainder) {
+                            pendingReasoningLikeContent = '';
+                            ensureReasoningScaffold();
+                            reasoning += split.reasoningPrefix;
+                            emit(buildResponsesReasoningDeltaEvent({
+                                sequenceNumber: nextSeq(),
+                                outputIndex: reasoningOutputIndex,
+                                itemId: reasoningItemId,
+                                delta: split.reasoningPrefix
+                            }));
+                            ensureOutputScaffold();
+                            content += split.contentRemainder;
+                            emit(buildResponsesTextDeltaEvent({
+                                sequenceNumber: nextSeq(),
+                                outputIndex: messageOutputIndex,
+                                contentIndex: contentIndex,
+                                itemId: outputItemId,
+                                delta: split.contentRemainder
+                            }));
+                            return;
+                        }
+                        if (!reasoning && looksLikeLeakedReasoningPrefix(combinedCandidate)) {
+                            pendingReasoningLikeContent = combinedCandidate;
+                            return;
+                        }
+                        flushPendingReasoningLikeContentAsText();
                         ensureOutputScaffold();
                         content += filtered;
                         emit(buildResponsesTextDeltaEvent({
@@ -965,6 +1024,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 }
 
                 if (!content && !reasoning) {
+                    flushPendingReasoningLikeContentAsText();
                     const polled = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS);
                     if (polled.error && !polled.content && !polled.reasoning) throw polled.error;
                     if (polled.reasoning) sendResponsesDelta(polled.reasoning, true);
@@ -990,10 +1050,29 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 }
 
                 if (!announcedOutput) {
+                    flushPendingReasoningLikeContentAsReasoning();
                     ensureOutputScaffold();
                 }
 
-                if (announcedReasoning && RESPONSE_REASONING_VISIBILITY === 'full') {
+                const splitLeakedResponsesContent = () => {
+                    if (reasoning || !content) return;
+                    const split = splitLeakedReasoningPrefix(content);
+                    if (!split.reasoningPrefix || !split.contentRemainder) return;
+                    reasoning = split.reasoningPrefix;
+                    content = split.contentRemainder;
+                    if (!announcedReasoning) {
+                        ensureReasoningScaffold();
+                        emit(buildResponsesReasoningDeltaEvent({
+                            sequenceNumber: nextSeq(),
+                            outputIndex: reasoningOutputIndex,
+                            itemId: reasoningItemId,
+                            delta: reasoning
+                        }));
+                    }
+                };
+                splitLeakedResponsesContent();
+
+                if (announcedReasoning && (RESPONSE_REASONING_VISIBILITY === 'full' || RESPONSE_REASONING_VISIBILITY === 'summary')) {
                     emit(buildResponsesReasoningDoneEvent({
                         sequenceNumber: nextSeq(),
                         outputIndex: reasoningOutputIndex,
@@ -1007,6 +1086,8 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         text: reasoning
                     }));
                 }
+
+                content = stripLeakedReasoningPreamble(content);
 
                 if (announcedContent) {
                     emit(buildResponsesTextDoneEvent({
@@ -1031,7 +1112,6 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     }));
                 }
 
-                content = stripLeakedReasoningPreamble(content);
                 const sanitized = sanitizeAssistantPayload({ content, reasoning });
                 if (sanitized.corrupted) {
                     emit(buildResponsesCompletedEvent({
@@ -1068,8 +1148,9 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 return res.end();
             }
 
+            const promptSentAt = Date.now();
             latency.checkpoint('prompt_sent', { model: `${pID}/${mID}`, sessionId, stream: false });
-            const responseRes = await client.session.prompt(promptParams);
+            const responseRes = await promptWithTimeout(client, (...args) => logDebug(...args), sleep, promptParams, REQUEST_TIMEOUT_MS);
             const extractedPrompt = extractAssistantPayloadFromPromptResult(responseRes);
             content = extractedPrompt.content || '';
             reasoning = extractedPrompt.reasoning || '';
@@ -1077,6 +1158,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, via: 'non_stream_prompt_result' });
             }
 
+            let error = null;
             if (!content && !reasoning) {
                 const responseParts = responseRes.data?.parts || responseRes?.parts || [];
                 content = responseParts.filter(p => p.type === 'text').map(p => p.text).join('\n');
@@ -1086,11 +1168,32 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 }
             }
 
+            if (!content && !reasoning) {
+                const polled = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, promptSentAt);
+                content = polled.content || '';
+                reasoning = polled.reasoning || '';
+                error = polled.error || null;
+                if (content || reasoning) {
+                    latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, via: 'non_stream_poll_result' });
+                }
+            }
+
             if (!content && responseRes.data) {
                 const data = responseRes.data;
                 content = typeof data === 'string' ? data : data?.message || JSON.stringify(data);
             }
 
+            if (error && !content && !reasoning) {
+                cleanupSessionLater(client, sessionId, 3000, conversationKey);
+                return res.status(502).json({
+                    error: {
+                        message: error.data?.message || error.message || 'OpenCode provider error',
+                        type: error.name || 'OpenCodeError'
+                    }
+                });
+            }
+
+            content = stripLeakedReasoningPreamble(content);
             const sanitized = sanitizeAssistantPayload({ content, reasoning });
             if (sanitized.corrupted) {
                 cleanupSessionLater(client, sessionId, 3000, conversationKey);

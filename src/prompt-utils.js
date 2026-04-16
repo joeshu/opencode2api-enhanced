@@ -1,4 +1,5 @@
 export const TOOL_GUARD_MESSAGE = 'Tools are disabled. Do not call tools or function calls. Answer directly from the conversation and general knowledge only. If the user asks for real-time or external information (for example: weather, news, live search results, current events, prices, schedules, device-local sensor data, or location-based updates), do not invent, simulate, or summarize unavailable live data. Clearly say that live tools are currently unavailable and ask the user to enable tools or switch to a tool-enabled mode.';
+export const TOOLS_ENABLED_MESSAGE = 'Tools are available. When the user asks for real-time, current, latest, external, or device/system information, prefer using real tools instead of answering from prior knowledge. Examples: use shell/bash for current system time or local command checks; use websearch/webfetch for weather, news, and live web information; use read/glob/grep/codesearch for repository/file questions. If a suitable tool exists, use it before answering. In your final answer, briefly state how you obtained the information.';
 export const CONTEXT_SCOPE_GUARD_MESSAGE = 'Use repository or project context only when the user clearly refers to the current project, files, implementation details, architecture, or asks for codebase-specific help. For ambiguous or general questions, do not assume the current repository is the target. If the user asks for real-time or external information such as current time, weather, news, search results, or other live data, prefer tool use when allowed. When tools are available and the request clearly asks for live or latest information, prefer real tool calls (especially websearch / webfetch when relevant) over speculative or advisory answers. If tools are not allowed or the live lookup fails, do not fabricate results: state the limitation briefly and ask the user to enable tools or retry.';
 
 export function buildSystemPrompt(systemMsg, reasoningEffort = null, options = {}) {
@@ -10,6 +11,9 @@ export function buildSystemPrompt(systemMsg, reasoningEffort = null, options = {
         parts.push(systemMsg.trim());
     }
     parts.push(CONTEXT_SCOPE_GUARD_MESSAGE);
+    if (!disableTools) {
+        parts.push(TOOLS_ENABLED_MESSAGE);
+    }
     if (reasoningEffort && reasoningEffort !== 'none') {
         parts.push(`[Reasoning Effort: ${reasoningEffort}]`);
     }

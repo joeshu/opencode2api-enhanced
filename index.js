@@ -1,40 +1,10 @@
 import { startProxy } from './src/proxy.js';
+import { buildStartProxyConfig, normalizeBool } from './src/start-proxy-config.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-function parseBool(value, fallback) {
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'number') return value === 1;
-    if (typeof value === 'string') {
-        const v = value.trim().toLowerCase();
-        if (['1', 'true', 'yes', 'y', 'on'].includes(v)) return true;
-        if (['0', 'false', 'no', 'n', 'off'].includes(v)) return false;
-    }
-    if (value === undefined || value === null) return fallback;
-    return Boolean(value);
-}
-
-// Default configuration
-const defaultConfig = {
-    PORT: parseInt(process.env.OPENCODE_PROXY_PORT) || 10000,
-    API_KEY: '',
-    OPENCODE_SERVER_URL: `http://127.0.0.1:${process.env.OPENCODE_SERVER_PORT || 10001}`,
-    OPENCODE_SERVER_PASSWORD: process.env.OPENCODE_SERVER_PASSWORD || '',
-    MANAGE_BACKEND: parseBool(process.env.OPENCODE_PROXY_MANAGE_BACKEND, false),
-    OPENCODE_PATH: 'opencode',
-    BIND_HOST: '0.0.0.0',
-    DISABLE_TOOLS: true,
-    PROMPT_MODE: process.env.OPENCODE_PROXY_PROMPT_MODE || 'standard',
-    OMIT_SYSTEM_PROMPT: parseBool(process.env.OPENCODE_PROXY_OMIT_SYSTEM_PROMPT, false),
-    AUTO_CLEANUP_CONVERSATIONS: parseBool(process.env.OPENCODE_PROXY_AUTO_CLEANUP_CONVERSATIONS, false),
-    CLEANUP_INTERVAL_MS: parseInt(process.env.OPENCODE_PROXY_CLEANUP_INTERVAL_MS) || 43200000,
-    CLEANUP_MAX_AGE_MS: parseInt(process.env.OPENCODE_PROXY_CLEANUP_MAX_AGE_MS) || 86400000
-};
-
-// Load config from file
 const configPath = path.join(__dirname, 'config.json');
 let fileConfig = {};
 
@@ -48,35 +18,51 @@ if (fs.existsSync(configPath)) {
     }
 }
 
-// Merge configs: env > file > default
-const finalConfig = {
-    PORT: parseInt(process.env.OPENCODE_PROXY_PORT) || parseInt(process.env.PORT) || fileConfig.PORT || defaultConfig.PORT,
-    API_KEY: process.env.API_KEY || fileConfig.API_KEY || defaultConfig.API_KEY,
-    OPENCODE_SERVER_URL: process.env.OPENCODE_SERVER_URL || fileConfig.OPENCODE_SERVER_URL || defaultConfig.OPENCODE_SERVER_URL,
-    OPENCODE_SERVER_PASSWORD: process.env.OPENCODE_SERVER_PASSWORD || fileConfig.OPENCODE_SERVER_PASSWORD || defaultConfig.OPENCODE_SERVER_PASSWORD,
-    MANAGE_BACKEND: parseBool(process.env.OPENCODE_PROXY_MANAGE_BACKEND, parseBool(fileConfig.MANAGE_BACKEND, defaultConfig.MANAGE_BACKEND)),
-    OPENCODE_PATH: process.env.OPENCODE_PATH || fileConfig.OPENCODE_PATH || defaultConfig.OPENCODE_PATH,
-    BIND_HOST: process.env.BIND_HOST || fileConfig.BIND_HOST || defaultConfig.BIND_HOST,
-    DISABLE_TOOLS: parseBool(process.env.OPENCODE_DISABLE_TOOLS, parseBool(fileConfig.DISABLE_TOOLS, defaultConfig.DISABLE_TOOLS)),
+function parseBool(value, fallback) {
+    const normalized = normalizeBool(value);
+    if (typeof normalized === 'boolean') return normalized;
+    if (value === undefined || value === null) return fallback;
+    return Boolean(value);
+}
+
+// Build base config using the same profile-aware logic as the main proxy
+const baseConfig = buildStartProxyConfig({
+    PORT: parseInt(process.env.OPENCODE_PROXY_PORT) || parseInt(process.env.PORT) || fileConfig.PORT || 10000,
+    API_KEY: process.env.API_KEY || fileConfig.API_KEY || '',
+    OPENCODE_PROFILE: process.env.OPENCODE_PROFILE || fileConfig.OPENCODE_PROFILE,
+    OPENCODE_SERVER_URL: process.env.OPENCODE_SERVER_URL || fileConfig.OPENCODE_SERVER_URL || `http://127.0.0.1:${process.env.OPENCODE_SERVER_PORT || 10001}`,
+    OPENCODE_SERVER_PASSWORD: process.env.OPENCODE_SERVER_PASSWORD || fileConfig.OPENCODE_SERVER_PASSWORD || '',
+    MANAGE_BACKEND: parseBool(process.env.OPENCODE_PROXY_MANAGE_BACKEND, parseBool(fileConfig.MANAGE_BACKEND, false)),
+    OPENCODE_PATH: process.env.OPENCODE_PATH || fileConfig.OPENCODE_PATH || 'opencode',
+    BIND_HOST: process.env.BIND_HOST || fileConfig.BIND_HOST || '0.0.0.0',
+    DISABLE_TOOLS: process.env.OPENCODE_DISABLE_TOOLS ?? fileConfig.DISABLE_TOOLS,
+    TOOL_POLICY: process.env.OPENCODE_TOOL_POLICY || fileConfig.TOOL_POLICY,
+    RESPONSE_REASONING_VISIBILITY: process.env.OPENCODE_RESPONSE_REASONING_VISIBILITY || fileConfig.RESPONSE_REASONING_VISIBILITY,
     USE_ISOLATED_HOME: parseBool(process.env.OPENCODE_USE_ISOLATED_HOME, parseBool(fileConfig.USE_ISOLATED_HOME, false)),
-    REQUEST_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_REQUEST_TIMEOUT_MS) || fileConfig.REQUEST_TIMEOUT_MS || 180000,
-    SERVER_REQUEST_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_SERVER_REQUEST_TIMEOUT_MS) || fileConfig.SERVER_REQUEST_TIMEOUT_MS || null,
-    SERVER_HEADERS_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_SERVER_HEADERS_TIMEOUT_MS) || fileConfig.SERVER_HEADERS_TIMEOUT_MS || null,
-    SERVER_KEEPALIVE_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_SERVER_KEEPALIVE_TIMEOUT_MS) || fileConfig.SERVER_KEEPALIVE_TIMEOUT_MS || null,
-    SERVER_SOCKET_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_SERVER_SOCKET_TIMEOUT_MS) || fileConfig.SERVER_SOCKET_TIMEOUT_MS || null,
-    SHUTDOWN_GRACE_MS: parseInt(process.env.OPENCODE_PROXY_SHUTDOWN_GRACE_MS) || fileConfig.SHUTDOWN_GRACE_MS || 10000,
+    REQUEST_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_REQUEST_TIMEOUT_MS) || fileConfig.REQUEST_TIMEOUT_MS,
+    SERVER_REQUEST_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_SERVER_REQUEST_TIMEOUT_MS) || fileConfig.SERVER_REQUEST_TIMEOUT_MS,
+    SERVER_HEADERS_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_SERVER_HEADERS_TIMEOUT_MS) || fileConfig.SERVER_HEADERS_TIMEOUT_MS,
+    SERVER_KEEPALIVE_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_SERVER_KEEPALIVE_TIMEOUT_MS) || fileConfig.SERVER_KEEPALIVE_TIMEOUT_MS,
+    SERVER_SOCKET_TIMEOUT_MS: parseInt(process.env.OPENCODE_PROXY_SERVER_SOCKET_TIMEOUT_MS) || fileConfig.SERVER_SOCKET_TIMEOUT_MS,
+    SHUTDOWN_GRACE_MS: parseInt(process.env.OPENCODE_PROXY_SHUTDOWN_GRACE_MS) || fileConfig.SHUTDOWN_GRACE_MS,
     ZEN_API_KEY: process.env.OPENCODE_ZEN_API_KEY || fileConfig.ZEN_API_KEY || '',
-    MODEL_CACHE_MS: parseInt(process.env.OPENCODE_PROXY_MODEL_CACHE_MS) || fileConfig.MODEL_CACHE_MS || 60000,
-    MAX_IMAGE_BYTES: parseInt(process.env.OPENCODE_PROXY_MAX_IMAGE_BYTES) || fileConfig.MAX_IMAGE_BYTES || 10485760,
+    MODEL_CACHE_MS: parseInt(process.env.OPENCODE_PROXY_MODEL_CACHE_MS) || fileConfig.MODEL_CACHE_MS,
+    MAX_IMAGE_BYTES: parseInt(process.env.OPENCODE_PROXY_MAX_IMAGE_BYTES) || fileConfig.MAX_IMAGE_BYTES,
     ALLOW_PRIVATE_IMAGE_HOSTS: parseBool(process.env.OPENCODE_PROXY_ALLOW_PRIVATE_IMAGE_HOSTS, parseBool(fileConfig.ALLOW_PRIVATE_IMAGE_HOSTS, false)),
-    MAX_CONCURRENT_REQUESTS: parseInt(process.env.OPENCODE_PROXY_MAX_CONCURRENT_REQUESTS) || fileConfig.MAX_CONCURRENT_REQUESTS || 8,
-    PROMPT_MODE: process.env.OPENCODE_PROXY_PROMPT_MODE || fileConfig.PROMPT_MODE || defaultConfig.PROMPT_MODE,
-    OMIT_SYSTEM_PROMPT: parseBool(process.env.OPENCODE_PROXY_OMIT_SYSTEM_PROMPT, parseBool(fileConfig.OMIT_SYSTEM_PROMPT, defaultConfig.OMIT_SYSTEM_PROMPT)),
-    AUTO_CLEANUP_CONVERSATIONS: parseBool(process.env.OPENCODE_PROXY_AUTO_CLEANUP_CONVERSATIONS, parseBool(fileConfig.AUTO_CLEANUP_CONVERSATIONS, defaultConfig.AUTO_CLEANUP_CONVERSATIONS)),
-    CLEANUP_INTERVAL_MS: parseInt(process.env.OPENCODE_PROXY_CLEANUP_INTERVAL_MS) || fileConfig.CLEANUP_INTERVAL_MS || defaultConfig.CLEANUP_INTERVAL_MS,
-    CLEANUP_MAX_AGE_MS: parseInt(process.env.OPENCODE_PROXY_CLEANUP_MAX_AGE_MS) || fileConfig.CLEANUP_MAX_AGE_MS || defaultConfig.CLEANUP_MAX_AGE_MS,
+    MAX_CONCURRENT_REQUESTS: parseInt(process.env.OPENCODE_PROXY_MAX_CONCURRENT_REQUESTS) || fileConfig.MAX_CONCURRENT_REQUESTS,
+    PROMPT_MODE: process.env.OPENCODE_PROXY_PROMPT_MODE || fileConfig.PROMPT_MODE || 'standard',
+    OMIT_SYSTEM_PROMPT: parseBool(process.env.OPENCODE_PROXY_OMIT_SYSTEM_PROMPT, parseBool(fileConfig.OMIT_SYSTEM_PROMPT, false)),
+    AUTO_CLEANUP_CONVERSATIONS: parseBool(process.env.OPENCODE_PROXY_AUTO_CLEANUP_CONVERSATIONS, parseBool(fileConfig.AUTO_CLEANUP_CONVERSATIONS, false)),
+    CLEANUP_INTERVAL_MS: parseInt(process.env.OPENCODE_PROXY_CLEANUP_INTERVAL_MS) || fileConfig.CLEANUP_INTERVAL_MS,
+    CLEANUP_MAX_AGE_MS: parseInt(process.env.OPENCODE_PROXY_CLEANUP_MAX_AGE_MS) || fileConfig.CLEANUP_MAX_AGE_MS,
     DEBUG: parseBool(process.env.OPENCODE_PROXY_DEBUG, parseBool(process.env.DEBUG, parseBool(fileConfig.DEBUG, false)))
+});
+
+const finalConfig = {
+    ...baseConfig,
+    DEBUG: parseBool(process.env.OPENCODE_PROXY_DEBUG, parseBool(process.env.DEBUG, parseBool(fileConfig.DEBUG, baseConfig.DEBUG)))
 };
+
 
 // Validate required configuration
 if (!finalConfig.OPENCODE_PATH) {
