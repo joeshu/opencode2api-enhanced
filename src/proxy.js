@@ -280,6 +280,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     res.setHeader('Cache-Control', 'no-cache');
                     res.setHeader('Connection', 'keep-alive');
 
+                    const toolsActuallyEnabled = !DISABLE_TOOLS && TOOL_POLICY !== 'off';
                     if (stream) {
                         const filterContentDelta = createToolCallFilter(DISABLE_TOOLS);
                         const filterReasoningDelta = createToolCallFilter(DISABLE_TOOLS);
@@ -378,7 +379,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
 `);
                         };
 
-                        emitToolStatus('starting', 'Starting tool-enabled generation');
+                        if (toolsActuallyEnabled) emitToolStatus('starting', 'Starting tool-enabled generation');
                         let clientDisconnected = false;
                         res.on('close', () => {
                             clientDisconnected = true;
@@ -405,7 +406,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             const safeCollect = collectPromise.catch((err) => ({ __error: err }));
                             const promptStart = Date.now();
                             client.session.prompt(promptParams).catch(err => logDebug('Prompt error:', err.message));
-                            emitToolStatus('running', 'Tool-enabled generation in progress');
+                            if (toolsActuallyEnabled) emitToolStatus('running', 'Tool-enabled generation in progress');
                             collected = await safeCollect;
                         } catch (e) {
                             logDebug('Stream error:', e.message);
@@ -416,7 +417,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                 logDebug('Client disconnected before fallback', { sessionId });
                                 return;
                             }
-                            emitToolStatus('failed', 'Tool-enabled stream failed, falling back to polling');
+                            if (toolsActuallyEnabled) emitToolStatus('failed', 'Tool-enabled stream failed, falling back to polling');
                             logDebug('SSE collect error, falling back to polling', {
                                 sessionId,
                                 error: collected.__error?.message
@@ -436,7 +437,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                 logDebug('Client disconnected before fallback', { sessionId });
                                 return;
                             }
-                            emitToolStatus('running', 'No stream data yet, polling for completion');
+                            if (toolsActuallyEnabled) emitToolStatus('running', 'No stream data yet, polling for completion');
                             logDebug('Fallback to polling after no SSE data', { sessionId, suspectedUpstreamIssue: true });
                             const { content, reasoning, error } = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS);
                             if (error && !content && !reasoning) {
@@ -452,7 +453,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                 logDebug('Client disconnected before fallback', { sessionId });
                                 return;
                             }
-                            emitToolStatus('running', 'Stream idle, polling for completion');
+                            if (toolsActuallyEnabled) emitToolStatus('running', 'Stream idle, polling for completion');
                             logDebug('SSE idle timeout, polling for completion', { sessionId, suspectedUpstreamIssue: !collected.receivedDelta });
                             const { content, reasoning, error } = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS);
                             if (error && !content && !reasoning) {
@@ -545,7 +546,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             completionTokens,
                             reasoningTokens
                         }))}\n\n`);
-                        emitToolStatus('completed', 'Tool-enabled generation completed');
+                        if (toolsActuallyEnabled) emitToolStatus('completed', 'Tool-enabled generation completed');
                         res.write('data: [DONE]\n\n');
                         latency.finalize({ sessionId, model: `${pID}/${mID}`, via: 'stream' });
                         res.end();
@@ -816,9 +817,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 top_p
             });
 
-            let content = '';
-            let reasoning = '';
-            let responsesStreamCorrupted = false;
+            const toolsActuallyEnabled = !DISABLE_TOOLS && TOOL_POLICY !== 'off';
             if (stream) {
                 res.setHeader('Content-Type', 'text/event-stream');
                 res.setHeader('Cache-Control', 'no-cache');
@@ -842,7 +841,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     error
                 }));
 
-                emitToolStatus('starting', 'Starting tool-enabled generation');
+                if (toolsActuallyEnabled) emitToolStatus('starting', 'Starting tool-enabled generation');
                 emit(buildResponsesCreatedEvent({
                     responseId,
                     model: `${pID}/${mID}`,
@@ -940,11 +939,11 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     );
                     const safeCollect = collectPromise.catch((err) => ({ __error: err }));
                     client.session.prompt(promptParams).catch(err => logDebug('Responses prompt error:', err.message));
-                    emitToolStatus('running', 'Tool-enabled generation in progress');
+                    if (toolsActuallyEnabled) emitToolStatus('running', 'Tool-enabled generation in progress');
                     latency.checkpoint('prompt_sent', { model: `${pID}/${mID}`, sessionId, stream: true });
                     collected = await safeCollect;
                 } catch (e) {
-                    emitToolStatus('failed', 'Tool-enabled stream failed', { type: 'upstream_tool_execution_error', retryable: true });
+                    if (toolsActuallyEnabled) emitToolStatus('failed', 'Tool-enabled stream failed', { type: 'upstream_tool_execution_error', retryable: true });
                     collected = { __error: e };
                 }
 
