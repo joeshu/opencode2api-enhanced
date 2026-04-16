@@ -281,6 +281,15 @@ async function main() {
     assert((responsesBody.output?.[0]?.content?.[0]?.text || '').includes('Smoke response API'), 'responses content missing');
     printCheck('responses', `requestId=${responses.headers['x-request-id']}`);
 
+    const healthAfterTraffic = await get('/health');
+    const healthAfterTrafficBody = parseBody(healthAfterTraffic);
+    assert(healthAfterTraffic.status === 200, `health after traffic expected 200 got ${healthAfterTraffic.status}`);
+    assert(healthAfterTrafficBody.latency?.['/v1/chat/completions'], 'health latency missing chat summary');
+    assert(healthAfterTrafficBody.latency?.['/v1/responses'], 'health latency missing responses summary');
+    assert(healthAfterTrafficBody.latency['/v1/chat/completions'].firstDeltaMs !== undefined, 'chat latency summary missing firstDeltaMs');
+    assert(healthAfterTrafficBody.latency['/v1/responses'].firstDeltaMs !== undefined, 'responses latency summary missing firstDeltaMs');
+    printCheck('health latency', 'chat/responses summaries present');
+
     const reuseFirst = await post('/v1/responses', {
       model: 'opencode/kimi-k2.5-free',
       input: 'hello from responses',
