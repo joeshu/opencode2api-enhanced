@@ -968,6 +968,11 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     if (polled.error && !polled.content && !polled.reasoning) throw polled.error;
                     if (polled.reasoning) sendResponsesDelta(polled.reasoning, true);
                     if (polled.content) sendResponsesDelta(polled.content, false);
+                } else if (collected && collected.stage === 'permission_asked') {
+                    throw Object.assign(new Error('Tool execution is waiting for permission and cannot complete in the current streaming path.'), {
+                        statusCode: 409,
+                        code: 'tool_permission_required'
+                    });
                 } else if (collected && collected.idleTimeout) {
                     const polled = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS);
                     const remainingReasoning = polled.reasoning && polled.reasoning.startsWith(reasoning)

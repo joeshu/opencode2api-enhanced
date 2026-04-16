@@ -1,3 +1,19 @@
+function getEventSessionId(event) {
+    return event?.properties?.part?.sessionID ||
+        event?.properties?.info?.sessionID ||
+        event?.properties?.sessionID ||
+        event?.sessionID ||
+        null;
+}
+
+function getEventDelta(event) {
+    return event?.properties?.delta || event?.delta || '';
+}
+
+function getEventPartType(event) {
+    return event?.properties?.part?.type || event?.part?.type || null;
+}
+
 export function extractFromParts(parts) {
     if (!Array.isArray(parts)) return { content: '', reasoning: '' };
     const content = parts.filter((p) => p.type === 'text').map((p) => p.text).join('');
@@ -73,6 +89,8 @@ export async function collectFromEvents(client, logDebug, sessionId, timeoutMs, 
     let content = '';
     let reasoning = '';
     let receivedDelta = false;
+    let sawProgressSignal = false;
+    let pendingPermission = null;
     let deltaChars = 0;
     let firstDeltaAt = null;
     const startedAt = Date.now();
@@ -90,8 +108,13 @@ export async function collectFromEvents(client, logDebug, sessionId, timeoutMs, 
                 if (finished || receivedDelta) return;
                 finished = true;
                 controller.abort();
-                logDebug('No event data received', { sessionId, ms: Date.now() - startedAt });
-                resolve({ content: '', reasoning: '', noData: true, stage: 'first_delta_timeout' });
+                if (pendingPermission) {
+                    logDebug('Permission prompt blocked completion', { sessionId, ms: Date.now() - startedAt, pendingPermission });
+                    resolve({ content, reasoning, noData: true, stage: 'permission_asked', permissionAsked: pendingPermission, sawProgressSignal });
+                    return;
+                }
+                logDebug('No event data received', { sessionId, ms: Date.now() - startedAt, sawProgressSignal });
+                resolve({ content, reasoning, noData: true, stage: sawProgressSignal ? 'progress_without_payload' : 'first_delta_timeout' });
             }, firstDeltaTimeoutMs)
             : null;
 
@@ -115,16 +138,22 @@ export async function collectFromEvents(client, logDebug, sessionId, timeoutMs, 
         (async () => {
             try {
                 for await (const event of eventStream) {
+                    const eventSessionId = getEventSessionId(event);
+                    const deltaValue = getEventDelta(event);
+                    const partType = getEventPartType(event);
                     logDebug('SSE event received', {
                         type: event?.type,
-                        sessionId: event?.properties?.part?.sessionID || event?.properties?.info?.sessionID,
-                        hasDelta: Boolean(event?.properties?.delta),
-                        deltaLen: event?.properties?.delta?.length || 0,
-                        partType: event?.properties?.part?.type
+                        sessionId: eventSessionId,
+                        hasDelta: Boolean(deltaValue),
+                        deltaLen: deltaValue?.length || 0,
+                        partType
                     });
 
-                    if (event.type === 'message.part.updated' && event.properties.part.sessionID === sessionId) {
-                        const { part, delta } = event.properties;
+                    if ((event.type === 'message.part.updated' || event.type === 'message.part.delta') && eventSessionId === sessionId) {
+                        if (partType === 'tool' || partType === 'step-start' || partType === 'step-finish') {
+                            sawProgressSignal = true;
+                        }
+                        const delta = deltaValue;
                         if (delta) {
                             receivedDelta = true;
                             if (firstDeltaTimer) clearTimeout(firstDeltaTimer);
@@ -134,10 +163,10 @@ export async function collectFromEvents(client, logDebug, sessionId, timeoutMs, 
                                 logDebug('SSE first delta', {
                                     sessionId,
                                     ms: firstDeltaAt - startedAt,
-                                    type: part.type
+                                    type: partType
                                 });
                             }
-                            if (part.type === 'reasoning') {
+                            if (partType === 'reasoning') {
                                 reasoning += delta;
                                 if (onDelta) onDelta(delta, true);
                             } else {
@@ -146,6 +175,10 @@ export async function collectFromEvents(client, logDebug, sessionId, timeoutMs, 
                             }
                             deltaChars += delta.length;
                         }
+                    }
+                    if (event.type === 'permission.asked') {
+                        pendingPermission = event?.properties || { asked: true };
+                        sawProgressSignal = true;
                     }
                     if (event.type === 'message.updated' &&
                         event.properties.info.sessionID === sessionId &&
