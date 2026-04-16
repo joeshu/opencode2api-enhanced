@@ -264,7 +264,7 @@ async function main() {
     assert(chat.headers['x-request-id'] === 'smoke_chat_req', 'chat x-request-id not echoed');
     assert(chatBody.object === 'chat.completion', `chat object unexpected ${chatBody.object}`);
     assert((chatBody.choices?.[0]?.message?.content || '').includes('Smoke chat API'), 'chat content missing');
-    assert((chatBody.choices?.[0]?.message?.content || '').includes('<think>'), 'chat reasoning wrapper missing');
+    assert(!(chatBody.choices?.[0]?.message?.content || '').includes('<think>'), 'chat content should not inline reasoning');
     printCheck('chat completions', `requestId=${chat.headers['x-request-id']}`);
 
     const responses = await post('/v1/responses', {

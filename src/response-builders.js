@@ -4,11 +4,6 @@ export function buildChatCompletionResponse({ model, content, reasoning, fullPro
     const reasoningTokensCalc = Math.ceil((reasoning || '').length / 4);
     const totalTokens = promptTokens + completionTokensCalc + reasoningTokensCalc;
 
-    let finalContent = content;
-    if (reasoning) {
-        finalContent = `<think>\n${reasoning}\n</think>\n\n${content}`;
-    }
-
     return {
         body: {
             id: `chatcmpl-${Date.now()}`,
@@ -17,7 +12,7 @@ export function buildChatCompletionResponse({ model, content, reasoning, fullPro
             model,
             choices: [{
                 index: 0,
-                message: { role: 'assistant', content: finalContent },
+                message: { role: 'assistant', content: content || '' },
                 finish_reason: 'stop'
             }],
             usage: {

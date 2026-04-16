@@ -17,7 +17,8 @@ export async function ensureModelSession(config, deps) {
         model,
         log,
         sessionLogLabel = 'Session created',
-        conversationKey = ''
+        conversationKey = '',
+        allowSessionReuse = true
     } = deps;
 
     const resolvedModel = await resolveRequestedModel(model);
@@ -56,34 +57,36 @@ export async function ensureModelSession(config, deps) {
         logDebug('Active model update skipped', { providerID, modelID });
     }
 
-    const reusable = getReusableSession(conversationKey, {
-        serverUrl: config.OPENCODE_SERVER_URL,
-        providerID,
-        modelID
-    });
-    if (reusable?.sessionId) {
-        if (log) {
-            log('Session reused', {
-                sessionId: reusable.sessionId,
-                model: `${providerID}/${modelID}`,
-                conversationKey
-            });
-        }
-        return {
-            resolvedModel,
+    if (allowSessionReuse) {
+        const reusable = getReusableSession(conversationKey, {
+            serverUrl: config.OPENCODE_SERVER_URL,
             providerID,
-            modelID,
-            sessionId: reusable.sessionId,
-            reused: true,
-            conversationKey
-        };
+            modelID
+        });
+        if (reusable?.sessionId) {
+            if (log) {
+                log('Session reused', {
+                    sessionId: reusable.sessionId,
+                    model: `${providerID}/${modelID}`,
+                    conversationKey
+                });
+            }
+            return {
+                resolvedModel,
+                providerID,
+                modelID,
+                sessionId: reusable.sessionId,
+                reused: true,
+                conversationKey
+            };
+        }
     }
 
     const sessionRes = await client.session.create();
     const sessionId = sessionRes.data?.id;
     if (!sessionId) throw new Error('Failed to create OpenCode session');
 
-    if (conversationKey) {
+    if (allowSessionReuse && conversationKey) {
         rememberReusableSession(conversationKey, {
             sessionId,
             serverUrl: config.OPENCODE_SERVER_URL,

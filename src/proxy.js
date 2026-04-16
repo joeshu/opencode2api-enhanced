@@ -37,7 +37,7 @@ import { buildChatStreamChunk, buildChatReasoningChunk, buildChatStreamUsageChun
 import { buildToolStatusEvent } from './tool-status-builders.js';
 import { cleanupSessionLater } from './session-cleanup.js';
 import { extractConversationKey } from './session-store.js';
-import { sanitizeAssistantPayload, detectCorruptedUpstreamContent } from './output-sanitizer.js';
+import { sanitizeAssistantPayload, detectCorruptedUpstreamContent, stripLeakedReasoningPreamble } from './output-sanitizer.js';
 import { buildResponsesCreatedEvent, buildResponsesMessageOutputAddedEvent, buildResponsesContentPartAddedEvent, buildResponsesReasoningOutputAddedEvent, buildResponsesReasoningDeltaEvent, buildResponsesTextDeltaEvent, buildResponsesReasoningDoneEvent, buildResponsesReasoningItemDoneEvent, buildResponsesTextDoneEvent, buildResponsesContentPartDoneEvent, buildResponsesMessageItemDoneEvent, buildResponsesCompletedEvent } from './responses-stream-builders.js';
 import { ensureModelSession, buildPromptParams } from './session-preparation.js';
 import { createLatencyTracker } from './latency-tracker.js';
@@ -227,6 +227,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         model,
                         log,
                         conversationKey,
+                        allowSessionReuse: false,
                         sessionLogLabel: 'Session created'
                     });
                     pID = prepared.providerID;
@@ -591,7 +592,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                 }
                             });
                         }
-                        const safeContent = stripFunctionCalls(content, true, DISABLE_TOOLS);
+                        const safeContent = stripLeakedReasoningPreamble(stripFunctionCalls(content, true, DISABLE_TOOLS));
                         const safeReasoning = stripFunctionCalls(reasoning, true, DISABLE_TOOLS);
                         const sanitized = sanitizeAssistantPayload({ content: safeContent, reasoning: safeReasoning });
                         if (sanitized.corrupted) {
@@ -1030,6 +1031,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     }));
                 }
 
+                content = stripLeakedReasoningPreamble(content);
                 const sanitized = sanitizeAssistantPayload({ content, reasoning });
                 if (sanitized.corrupted) {
                     emit(buildResponsesCompletedEvent({
