@@ -5,6 +5,26 @@ export function extractFromParts(parts) {
     return { content, reasoning };
 }
 
+export function extractAssistantPayloadFromPromptResult(result) {
+    const data = result?.data ?? result;
+
+    if (Array.isArray(data)) {
+        for (let i = data.length - 1; i >= 0; i -= 1) {
+            const entry = data[i];
+            const info = entry?.info;
+            if (info?.role && info.role !== 'assistant') continue;
+            const extracted = extractFromParts(entry?.parts || []);
+            if (extracted.content || extracted.reasoning) return extracted;
+        }
+    }
+
+    if (data && Array.isArray(data.parts)) {
+        return extractFromParts(data.parts);
+    }
+
+    return { content: '', reasoning: '' };
+}
+
 export async function pollForAssistantResponse(client, logDebug, sleep, sessionId, timeoutMs, intervalMs, minMessageRank = 0) {
     const pollStart = Date.now();
     const startedAt = Date.now();

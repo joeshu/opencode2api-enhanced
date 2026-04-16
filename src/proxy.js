@@ -23,7 +23,7 @@ import { DEFAULT_MAX_IMAGE_BYTES, getImageDataUri } from './image.js';
 import { buildSystemPrompt, normalizeReasoningEffort, stripFunctionCalls, createToolCallFilter } from './prompt-utils.js';
 import { registerProcessCleanup } from './cleanup.js';
 import { createToolOverridesRuntime } from './tool-overrides.js';
-import { pollForAssistantResponse, collectFromEvents } from './events.js';
+import { pollForAssistantResponse, collectFromEvents, extractAssistantPayloadFromPromptResult } from './events.js';
 import { resolveOpencodePath } from './opencode-path.js';
 import { ensureBackend } from './backend-runtime.js';
 import { buildChatPromptParts, normalizeResponsesMessages } from './message-orchestration.js';
@@ -558,15 +558,25 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
 
                         let content = '';
                         let reasoning = '';
-                        const promptParts = promptResult?.data?.parts || promptResult?.parts || [];
-                        if (Array.isArray(promptParts) && promptParts.length) {
-                            content = promptParts.filter((part) => part.type === 'text').map((part) => part.text || '').join('\n');
-                            reasoning = promptParts.filter((part) => part.type === 'reasoning').map((part) => part.text || '').join('\n');
+                        const extractedPrompt = extractAssistantPayloadFromPromptResult(promptResult);
+                        content = extractedPrompt.content || '';
+                        reasoning = extractedPrompt.reasoning || '';
+                        if (content || reasoning) {
                             latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, via: 'non_stream_prompt_result' });
                         }
 
                         let error = null;
                         if (!content && !reasoning) {
+                            if (conversationKey) {
+                                return res.status(502).json({
+                                    error: {
+                                        message: 'Reused session returned no direct non-stream result.',
+                                        type: 'reused_session_result_unavailable',
+                                        retryable: true,
+                                        hint: 'For continued conversations, prefer the Responses API or use stream=true. Reused non-stream chat completions are not always reliably attributable to the latest turn.'
+                                    }
+                                });
+                            }
                             const polled = await pollForAssistantResponse(client, (...args) => logDebug(...args), sleep, sessionId, REQUEST_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS, promptSentAt);
                             content = polled.content || '';
                             reasoning = polled.reasoning || '';
@@ -818,6 +828,9 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
             });
 
             const toolsActuallyEnabled = !DISABLE_TOOLS && TOOL_POLICY !== 'off';
+            let content = '';
+            let reasoning = '';
+            let responsesStreamCorrupted = false;
             if (stream) {
                 res.setHeader('Content-Type', 'text/event-stream');
                 res.setHeader('Cache-Control', 'no-cache');
@@ -1047,11 +1060,21 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
 
             latency.checkpoint('prompt_sent', { model: `${pID}/${mID}`, sessionId, stream: false });
             const responseRes = await client.session.prompt(promptParams);
-            latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, via: 'non_stream_response' });
-            const responseParts = responseRes.data?.parts || [];
-            
-            content = responseParts.filter(p => p.type === 'text').map(p => p.text).join('\n');
-            reasoning = responseParts.filter(p => p.type === 'reasoning').map(p => p.text).join('\n');
+            const extractedPrompt = extractAssistantPayloadFromPromptResult(responseRes);
+            content = extractedPrompt.content || '';
+            reasoning = extractedPrompt.reasoning || '';
+            if (content || reasoning) {
+                latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, via: 'non_stream_prompt_result' });
+            }
+
+            if (!content && !reasoning) {
+                const responseParts = responseRes.data?.parts || responseRes?.parts || [];
+                content = responseParts.filter(p => p.type === 'text').map(p => p.text).join('\n');
+                reasoning = responseParts.filter(p => p.type === 'reasoning').map(p => p.text).join('\n');
+                if (content || reasoning) {
+                    latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, via: 'non_stream_response' });
+                }
+            }
 
             if (!content && responseRes.data) {
                 const data = responseRes.data;

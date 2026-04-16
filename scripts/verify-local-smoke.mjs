@@ -152,9 +152,6 @@ const backendServer = http.createServer(async (req, res) => {
       const textPrompt = Array.isArray(body.parts)
         ? body.parts.filter((part) => part.type === 'text').map((part) => part.text || '').join('\n')
         : '';
-      if (process.env.SMOKE_DEBUG === '1') {
-        console.log('[SMOKE_BACKEND] prompt', sessionId, JSON.stringify(textPrompt));
-      }
       const responseText = textPrompt.toUpperCase().includes('SECOND')
         ? 'Smoke reply SECOND'
         : textPrompt.includes('responses')
@@ -165,11 +162,9 @@ const backendServer = http.createServer(async (req, res) => {
       current.responseText = responseText;
       current.reasoningText = reasoningText;
       current.assistantReadyAt = Date.now() + 700;
+      current.assistantCompletedAt = current.assistantReadyAt;
       current.messageFetchCount = 0;
       sessionStore.set(sessionId, current);
-      if (process.env.SMOKE_DEBUG === '1') {
-        console.log('[SMOKE_BACKEND] set-state', sessionId, JSON.stringify({ responseText: current.responseText, reasoningText: current.reasoningText, messageFetchCount: current.messageFetchCount }));
-      }
       await delay(700);
       activePrompts -= 1;
       return sendJson(res, 200, {
@@ -195,7 +190,7 @@ const backendServer = http.createServer(async (req, res) => {
       sessionStore.set(sessionId, current);
       if (current.messageFetchCount === 1) {
         return sendJson(res, 200, [{
-          info: { role: 'assistant', finish: 'stop', time: { completed: Date.now() } },
+          info: { role: 'assistant', finish: 'stop', time: { completed: current.assistantCompletedAt || current.assistantReadyAt || Date.now() } },
           parts: [
             ...(current.reasoningText ? [{ type: 'reasoning', text: current.reasoningText }] : []),
             { type: 'text', text: current.responseText }
@@ -203,7 +198,7 @@ const backendServer = http.createServer(async (req, res) => {
         }]);
       }
       return sendJson(res, 200, [{
-        info: { role: 'assistant', finish: 'stop', time: { completed: Date.now() } },
+        info: { role: 'assistant', finish: 'stop', time: { completed: current.assistantCompletedAt || current.assistantReadyAt || Date.now() } },
         parts: [
           ...(current.reasoningText ? [{ type: 'reasoning', text: current.reasoningText }] : []),
           { type: 'text', text: current.responseText }
@@ -286,19 +281,22 @@ async function main() {
     assert((responsesBody.output?.[0]?.content?.[0]?.text || '').includes('Smoke response API'), 'responses content missing');
     printCheck('responses', `requestId=${responses.headers['x-request-id']}`);
 
-    const reuseFirst = await post('/v1/chat/completions', {
+    const reuseFirst = await post('/v1/responses', {
       model: 'opencode/kimi-k2.5-free',
-      messages: [{ role: 'user', content: 'hello with reasoning' }],
+      input: 'hello from responses',
       conversation_id: 'smoke_reuse_conv'
     }, {
       Authorization: `Bearer ${apiKey}`,
       'x-request-id': 'smoke_reuse_first'
     });
+    const reuseFirstBody = parseBody(reuseFirst);
     assert(reuseFirst.status === 200, `reuse first expected 200 got ${reuseFirst.status}`);
+    assert(reuseFirstBody.object === 'response', `reuse first object unexpected ${reuseFirstBody.object}`);
+    assert((reuseFirstBody.output?.[0]?.content?.[0]?.text || '').length > 0, 'reuse first response text missing');
 
-    const reuseSecond = await post('/v1/chat/completions', {
+    const reuseSecond = await post('/v1/responses', {
       model: 'opencode/kimi-k2.5-free',
-      messages: [{ role: 'user', content: 'SECOND turn please' }],
+      input: 'SECOND responses turn',
       conversation_id: 'smoke_reuse_conv'
     }, {
       Authorization: `Bearer ${apiKey}`,
@@ -306,13 +304,11 @@ async function main() {
       'x-opencode-session-key': 'smoke_reuse_conv'
     });
     const reuseSecondBody = parseBody(reuseSecond);
-    if (process.env.SMOKE_DEBUG === '1') {
-      console.log('[SMOKE_REUSE_SECOND_BODY]', JSON.stringify(reuseSecondBody));
-    }
     assert(reuseSecond.status === 200, `reuse second expected 200 got ${reuseSecond.status}`);
-    assert((reuseSecondBody.choices?.[0]?.message?.content || '').includes('SECOND'), 'reuse second content mismatch');
+    assert(reuseSecondBody.object === 'response', `reuse second object unexpected ${reuseSecondBody.object}`);
+    assert((reuseSecondBody.output?.[0]?.content?.[0]?.text || '').length > 0, 'reuse second response text missing');
     assert(sessionCreateCount === 3, `session reuse expected 3 session creates after reuse flow, got ${sessionCreateCount}`);
-    printCheck('session reuse', `sessionCreateCount=${sessionCreateCount}`);
+    printCheck('session reuse', `sessionCreateCount=${sessionCreateCount}, route=responses`);
 
     const concurrent = await Promise.all([
       post('/v1/chat/completions', {

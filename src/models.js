@@ -55,7 +55,8 @@ export function createModelsRuntime(client, modelCacheMs) {
                             : 1704067200,
                         owned_by: p.id,
                         capabilities: inferModelCapabilities(`${p.id}/${mId}`),
-                        aliases: buildModelAliases(`${p.id}/${mId}`)
+                        aliases: buildModelAliases(`${p.id}/${mId}`),
+                        provider: p.id
                     });
                 });
             }
