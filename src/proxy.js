@@ -33,7 +33,7 @@ import { createServerRuntime } from './server-runtime.js';
 import { getUserFacingHint } from './user-facing-errors.js';
 import { buildStartProxyConfig } from './start-proxy-config.js';
 import { buildChatCompletionResponse, buildResponsesApiResponse } from './response-builders.js';
-import { buildChatStreamChunk, buildChatStreamUsageChunk } from './stream-builders.js';
+import { buildChatStreamChunk, buildChatReasoningChunk, buildChatStreamUsageChunk } from './stream-builders.js';
 import { buildToolStatusEvent } from './tool-status-builders.js';
 import { cleanupSessionLater } from './session-cleanup.js';
 import { extractConversationKey } from './session-store.js';
@@ -72,7 +72,10 @@ export function createApp(config) {
         TRACE,
         DISABLE_TOOLS,
         TOOL_POLICY,
+        RESPONSE_REASONING_VISIBILITY,
         PROMPT_MODE,
+        EVENT_FIRST_DELTA_TIMEOUT_MS,
+        EVENT_IDLE_TIMEOUT_MS,
         OMIT_SYSTEM_PROMPT,
         AUTO_CLEANUP_CONVERSATIONS,
         CLEANUP_INTERVAL_MS,
@@ -339,10 +342,9 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             latency.markFirstDelta({ model: `${pID}/${mID}`, sessionId, isReasoning });
                             if (isReasoning) {
                                 if (!insideReasoning) {
-                                    res.write(`data: ${JSON.stringify(buildChatStreamChunk({
+                                    res.write(`data: ${JSON.stringify(buildChatReasoningChunk({
                                         id,
-                                        model: `${pID}/${mID}`,
-                                        content: '<think>\n'
+                                        model: `${pID}/${mID}`
                                     }))}\n\n`);
                                     insideReasoning = true;
                                 }
@@ -350,10 +352,9 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                 reasoningTokens += Math.ceil(filtered.length / 4);
                             } else {
                                 if (insideReasoning) {
-                                    res.write(`data: ${JSON.stringify(buildChatStreamChunk({
+                                    res.write(`data: ${JSON.stringify(buildChatReasoningChunk({
                                         id,
-                                        model: `${pID}/${mID}`,
-                                        content: '\n</think>\n\n'
+                                        model: `${pID}/${mID}`
                                     }))}\n\n`);
                                     insideReasoning = false;
                                 }
@@ -400,8 +401,8 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             sessionId,
                             REQUEST_TIMEOUT_MS,
                             sendDelta,
-                            DEFAULT_EVENT_FIRST_DELTA_TIMEOUT_MS,
-                            DEFAULT_EVENT_IDLE_TIMEOUT_MS
+                            EVENT_FIRST_DELTA_TIMEOUT_MS || DEFAULT_EVENT_FIRST_DELTA_TIMEOUT_MS,
+                            EVENT_IDLE_TIMEOUT_MS || DEFAULT_EVENT_IDLE_TIMEOUT_MS
                         );
                             const safeCollect = collectPromise.catch((err) => ({ __error: err }));
                             const promptStart = Date.now();
@@ -522,10 +523,9 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         }
 
                         if (insideReasoning) {
-                            res.write(`data: ${JSON.stringify(buildChatStreamChunk({
+                            res.write(`data: ${JSON.stringify(buildChatReasoningChunk({
                                 id,
-                                model: `${pID}/${mID}`,
-                                content: '\n</think>\n\n'
+                                model: `${pID}/${mID}`
                             }))}\n\n`);
                         }
 
@@ -709,9 +709,12 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                 manageBackend: config.MANAGE_BACKEND,
                 disableTools: DISABLE_TOOLS,
                 toolPolicy: TOOL_POLICY,
+                responseReasoningVisibility: RESPONSE_REASONING_VISIBILITY,
                 promptMode: PROMPT_MODE,
                 autoCleanupConversations: AUTO_CLEANUP_CONVERSATIONS,
                 requestTimeoutMs: REQUEST_TIMEOUT_MS,
+                eventFirstDeltaTimeoutMs: EVENT_FIRST_DELTA_TIMEOUT_MS,
+                eventIdleTimeoutMs: EVENT_IDLE_TIMEOUT_MS,
                 serverRequestTimeoutMs: SERVER_REQUEST_TIMEOUT_MS,
                 serverHeadersTimeoutMs: SERVER_HEADERS_TIMEOUT_MS,
                 serverKeepAliveTimeoutMs: SERVER_KEEPALIVE_TIMEOUT_MS,
@@ -947,8 +950,8 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         sessionId,
                         REQUEST_TIMEOUT_MS,
                         sendResponsesDelta,
-                        DEFAULT_EVENT_FIRST_DELTA_TIMEOUT_MS,
-                        DEFAULT_EVENT_IDLE_TIMEOUT_MS
+                        EVENT_FIRST_DELTA_TIMEOUT_MS || DEFAULT_EVENT_FIRST_DELTA_TIMEOUT_MS,
+                        EVENT_IDLE_TIMEOUT_MS || DEFAULT_EVENT_IDLE_TIMEOUT_MS
                     );
                     const safeCollect = collectPromise.catch((err) => ({ __error: err }));
                     client.session.prompt(promptParams).catch(err => logDebug('Responses prompt error:', err.message));
@@ -984,7 +987,7 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     ensureOutputScaffold();
                 }
 
-                if (announcedReasoning) {
+                if (announcedReasoning && RESPONSE_REASONING_VISIBILITY === 'full') {
                     emit(buildResponsesReasoningDoneEvent({
                         sequenceNumber: nextSeq(),
                         outputIndex: reasoningOutputIndex,

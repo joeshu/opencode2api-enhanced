@@ -18,6 +18,7 @@ function getProfileDefaults(profile) {
         return {
             DISABLE_TOOLS: false,
             TOOL_POLICY: 'full',
+            RESPONSE_REASONING_VISIBILITY: 'full',
             MAX_CONCURRENT_REQUESTS: 2,
             REQUEST_TIMEOUT_MS: 240000,
             SERVER_REQUEST_TIMEOUT_MS: 270000,
@@ -31,6 +32,7 @@ function getProfileDefaults(profile) {
         return {
             DISABLE_TOOLS: false,
             TOOL_POLICY: 'readonly',
+            RESPONSE_REASONING_VISIBILITY: 'summary',
             MAX_CONCURRENT_REQUESTS: 4,
             REQUEST_TIMEOUT_MS: 180000,
             SERVER_REQUEST_TIMEOUT_MS: 210000,
@@ -43,6 +45,7 @@ function getProfileDefaults(profile) {
     return {
         DISABLE_TOOLS: true,
         TOOL_POLICY: 'off',
+        RESPONSE_REASONING_VISIBILITY: 'summary',
         MAX_CONCURRENT_REQUESTS: 8,
         REQUEST_TIMEOUT_MS: 180000,
         SERVER_REQUEST_TIMEOUT_MS: 210000,
@@ -69,6 +72,14 @@ export function buildStartProxyConfig(options) {
         process.env.OPENCODE_TOOL_POLICY ||
         profileDefaults.TOOL_POLICY ||
         (disableTools ? 'off' : 'full')
+    ).trim().toLowerCase();
+
+    const reasoningVisibility = String(
+        options.RESPONSE_REASONING_VISIBILITY ||
+        options.responseReasoningVisibility ||
+        process.env.OPENCODE_RESPONSE_REASONING_VISIBILITY ||
+        profileDefaults.RESPONSE_REASONING_VISIBILITY ||
+        'summary'
     ).trim().toLowerCase();
 
     const promptMode = options.PROMPT_MODE || options.promptMode || process.env.OPENCODE_PROXY_PROMPT_MODE || 'standard';
@@ -99,6 +110,7 @@ export function buildStartProxyConfig(options) {
             normalizeBool(process.env.OPENCODE_PROXY_MANAGE_BACKEND) ??
             false,
         TOOL_POLICY: toolPolicy,
+        RESPONSE_REASONING_VISIBILITY: reasoningVisibility,
         DISABLE_TOOLS: disableTools,
         DEBUG: String(options.DEBUG || '').toLowerCase() === 'true' ||
             options.DEBUG === '1' ||
@@ -115,6 +127,8 @@ export function buildStartProxyConfig(options) {
             normalizeBool(process.env.OPENCODE_PROXY_ALLOW_PRIVATE_IMAGE_HOSTS) ??
             false,
         MAX_CONCURRENT_REQUESTS: Number(options.MAX_CONCURRENT_REQUESTS || process.env.OPENCODE_PROXY_MAX_CONCURRENT_REQUESTS || profileDefaults.MAX_CONCURRENT_REQUESTS || 8),
+        EVENT_FIRST_DELTA_TIMEOUT_MS: Number(options.EVENT_FIRST_DELTA_TIMEOUT_MS || process.env.OPENCODE_PROXY_EVENT_FIRST_DELTA_TIMEOUT_MS || 20000),
+        EVENT_IDLE_TIMEOUT_MS: Number(options.EVENT_IDLE_TIMEOUT_MS || process.env.OPENCODE_PROXY_EVENT_IDLE_TIMEOUT_MS || 15000),
         PROMPT_MODE: promptMode,
         OMIT_SYSTEM_PROMPT: normalizeBool(options.OMIT_SYSTEM_PROMPT) ??
             normalizeBool(process.env.OPENCODE_PROXY_OMIT_SYSTEM_PROMPT) ??

@@ -8,6 +8,16 @@ export function buildChatStreamChunk({ id, model, content, finishReason = null }
     };
 }
 
+export function buildChatReasoningChunk({ id, model }) {
+    return {
+        id,
+        object: 'chat.completion.chunk',
+        created: Math.floor(Date.now() / 1000),
+        model,
+        choices: [{ index: 0, delta: {}, finish_reason: null }]
+    };
+}
+
 export function buildChatStreamUsageChunk({ id, promptTokens, completionTokens, reasoningTokens }) {
     return {
         id,
