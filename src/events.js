@@ -11,7 +11,11 @@ function getEventDelta(event) {
 }
 
 function getEventPartType(event) {
-    return event?.properties?.part?.type || event?.part?.type || null;
+    return event?.properties?.part?.type ||
+        event?.part?.type ||
+        (event?.type === 'message.part.delta' && event?.properties?.field === 'text'
+            ? (String(event?.properties?.messageID || '').includes('reasoning') ? 'reasoning' : null)
+            : null);
 }
 
 export function extractFromParts(parts) {
@@ -141,6 +145,12 @@ export async function collectFromEvents(client, logDebug, sessionId, timeoutMs, 
                     const eventSessionId = getEventSessionId(event);
                     const deltaValue = getEventDelta(event);
                     const partType = getEventPartType(event);
+                    if (event.type === 'message.part.delta') {
+                        logDebug('SSE raw message.part.delta', {
+                            sessionId,
+                            raw: JSON.stringify(event).slice(0, 2000)
+                        });
+                    }
                     logDebug('SSE event received', {
                         type: event?.type,
                         sessionId: eventSessionId,
@@ -163,10 +173,11 @@ export async function collectFromEvents(client, logDebug, sessionId, timeoutMs, 
                                 logDebug('SSE first delta', {
                                     sessionId,
                                     ms: firstDeltaAt - startedAt,
-                                    type: partType
+                                    type: partType || event?.properties?.field || null
                                 });
                             }
-                            if (partType === 'reasoning') {
+                            const inferredReasoning = partType === 'reasoning' || event?.properties?.messageID?.includes('reasoning');
+                            if (inferredReasoning) {
                                 reasoning += delta;
                                 if (onDelta) onDelta(delta, true);
                             } else {
