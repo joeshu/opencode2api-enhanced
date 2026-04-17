@@ -45,9 +45,12 @@
 
 | 变量 | 默认值 | 说明 |
 |:-----|:-------|:-----|
-| `DEBUG` / `OPENCODE_PROXY_DEBUG` | `false` | 开启调试日志 |
-| `OPENCODE_PATH` | `opencode` | OpenCode 可执行文件路径 |
 | `OPENCODE_ZEN_API_KEY` | - | Zen API Key 透传 |
+| `OPENCODE_OPENAI_COMPAT_PROVIDER_ID` | `openai` | 注入到 OpenCode 的 OpenAI 兼容 provider ID |
+| `OPENCODE_OPENAI_COMPAT_BASE_URL` | - | OpenAI 兼容接口基地址，例如 `https://api.moonshot.cn/v1` |
+| `OPENCODE_OPENAI_COMPAT_API_KEY_ENV` | - | 供 OpenCode 读取的密钥环境变量名，例如 `MOONSHOT_API_KEY` |
+| `OPENCODE_OPENAI_COMPAT_MODEL` | - | 默认主模型 ID（不含 provider 前缀），例如 `kimi-k2.5` |
+| `OPENCODE_OPENAI_COMPAT_SMALL_MODEL` | - | 默认小模型 ID（不含 provider 前缀），未填时跟随主模型 |
 
 ---
 
@@ -106,3 +109,17 @@ OPENCODE_PROXY_MAX_CONCURRENT_REQUESTS=8
 OPENCODE_DISABLE_TOOLS=false
 OPENCODE_PROXY_DEBUG=true
 ```
+
+### 🌙 Moonshot / Kimi 免手写 opencode.json
+
+如果你希望直接通过环境变量把 Moonshot / Kimi 注入到 OpenCode，而不手动维护 `~/.config/opencode/opencode.json`，可以设置：
+
+```bash
+export MOONSHOT_API_KEY="<your-token>"
+export OPENCODE_OPENAI_COMPAT_BASE_URL="https://api.moonshot.cn/v1"
+export OPENCODE_OPENAI_COMPAT_API_KEY_ENV="MOONSHOT_API_KEY"
+export OPENCODE_OPENAI_COMPAT_MODEL="kimi-k2.5"
+export OPENCODE_OPENAI_COMPAT_SMALL_MODEL="kimi-k2.5"
+```
+
+启用后，`opencode2api-enhanced` 在启动受管 OpenCode 后端时会自动生成并注入对应 provider 配置，你无需手动写 `opencode.json`。

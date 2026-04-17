@@ -1,6 +1,15 @@
 import { DEFAULT_MAX_IMAGE_BYTES } from './image.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from './timeouts.js';
 
+function pickFirstNonEmpty(...values) {
+    for (const value of values) {
+        if (value === undefined || value === null) continue;
+        const text = String(value).trim();
+        if (text) return text;
+    }
+    return '';
+}
+
 export function normalizeBool(value) {
     if (typeof value === 'boolean') return value;
     if (typeof value === 'number') return value === 1;
@@ -136,8 +145,11 @@ export function buildStartProxyConfig(options) {
         AUTO_CLEANUP_CONVERSATIONS: normalizeBool(options.AUTO_CLEANUP_CONVERSATIONS) ??
             normalizeBool(process.env.OPENCODE_PROXY_AUTO_CLEANUP_CONVERSATIONS) ??
             false,
-        CLEANUP_INTERVAL_MS: Number.isFinite(cleanupIntervalMs) && cleanupIntervalMs > 0 ? cleanupIntervalMs : 12 * 60 * 60 * 1000,
-        CLEANUP_MAX_AGE_MS: Number.isFinite(cleanupMaxAgeMs) && cleanupMaxAgeMs > 0 ? cleanupMaxAgeMs : 24 * 60 * 60 * 1000,
-        OPENCODE_HOME_BASE: options.OPENCODE_HOME_BASE || null
+        OPENCODE_HOME_BASE: options.OPENCODE_HOME_BASE || null,
+        OPENAI_COMPAT_PROVIDER_ID: pickFirstNonEmpty(options.OPENAI_COMPAT_PROVIDER_ID, process.env.OPENCODE_OPENAI_COMPAT_PROVIDER_ID, 'openai'),
+        OPENAI_COMPAT_BASE_URL: pickFirstNonEmpty(options.OPENAI_COMPAT_BASE_URL, process.env.OPENCODE_OPENAI_COMPAT_BASE_URL, process.env.MOONSHOT_BASE_URL),
+        OPENAI_COMPAT_API_KEY_ENV: pickFirstNonEmpty(options.OPENAI_COMPAT_API_KEY_ENV, process.env.OPENCODE_OPENAI_COMPAT_API_KEY_ENV, process.env.MOONSHOT_API_KEY ? 'MOONSHOT_API_KEY' : ''),
+        OPENAI_COMPAT_MODEL: pickFirstNonEmpty(options.OPENAI_COMPAT_MODEL, process.env.OPENCODE_OPENAI_COMPAT_MODEL),
+        OPENAI_COMPAT_SMALL_MODEL: pickFirstNonEmpty(options.OPENAI_COMPAT_SMALL_MODEL, process.env.OPENCODE_OPENAI_COMPAT_SMALL_MODEL)
     };
 }

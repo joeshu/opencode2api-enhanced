@@ -3,6 +3,38 @@ import os from 'os';
 import path from 'path';
 import { spawn } from 'child_process';
 
+function buildInjectedOpencodeConfig(config) {
+    const providerId = String(config.OPENAI_COMPAT_PROVIDER_ID || 'openai').trim() || 'openai';
+    const baseURL = String(config.OPENAI_COMPAT_BASE_URL || '').trim();
+    const apiKeyEnvName = String(config.OPENAI_COMPAT_API_KEY_ENV || '').trim();
+    const model = String(config.OPENAI_COMPAT_MODEL || '').trim();
+    const smallModel = String(config.OPENAI_COMPAT_SMALL_MODEL || model).trim();
+
+    if (!baseURL || !apiKeyEnvName) return null;
+
+    const injected = {
+        provider: {
+            [providerId]: {
+                options: {
+                    apiKey: `{env:${apiKeyEnvName}}`,
+                    baseURL,
+                    timeout: 600000
+                }
+            }
+        }
+    };
+
+    if (model) injected.model = `${providerId}/${model}`;
+    if (smallModel) injected.small_model = `${providerId}/${smallModel}`;
+
+    return injected;
+}
+
+function writeJsonFile(targetPath, payload) {
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(targetPath, JSON.stringify(payload, null, 2), 'utf8');
+}
+
 export async function ensureBackend(config, deps) {
     const {
         backendState,
@@ -21,7 +53,12 @@ export async function ensureBackend(config, deps) {
         ZEN_API_KEY,
         OPENCODE_SERVER_PASSWORD,
         MANAGE_BACKEND,
-        PROMPT_MODE
+        PROMPT_MODE,
+        OPENAI_COMPAT_PROVIDER_ID,
+        OPENAI_COMPAT_BASE_URL,
+        OPENAI_COMPAT_API_KEY_ENV,
+        OPENAI_COMPAT_MODEL,
+        OPENAI_COMPAT_SMALL_MODEL
     } = config;
     const backendPassword = OPENCODE_SERVER_PASSWORD || '';
     const stateKey = OPENCODE_SERVER_URL;
@@ -98,6 +135,13 @@ export async function ensureBackend(config, deps) {
         }
 
         const isWindows = process.platform === 'win32';
+        const injectedOpencodeConfig = buildInjectedOpencodeConfig({
+            OPENAI_COMPAT_PROVIDER_ID,
+            OPENAI_COMPAT_BASE_URL,
+            OPENAI_COMPAT_API_KEY_ENV,
+            OPENAI_COMPAT_MODEL,
+            OPENAI_COMPAT_SMALL_MODEL
+        });
         const useIsolatedHome = typeof USE_ISOLATED_HOME === 'boolean'
             ? USE_ISOLATED_HOME
             : String(process.env.OPENCODE_USE_ISOLATED_HOME || '').toLowerCase() === 'true' ||
@@ -119,6 +163,11 @@ export async function ensureBackend(config, deps) {
                 ...process.env,
                 OPENCODE_PROJECT_DIR: workspace
             };
+            if (injectedOpencodeConfig) {
+                const configDir = path.join(envVars.USERPROFILE || os.homedir(), '.config', 'opencode');
+                writeJsonFile(path.join(configDir, 'opencode.json'), injectedOpencodeConfig);
+                console.log(`[Proxy] Injected OpenCode provider config at ${path.join(configDir, 'opencode.json')}`);
+            }
             console.log('[Proxy] Running on Windows, using standard user home directory');
         } else {
             fs.mkdirSync(workspace, { recursive: true });
@@ -147,16 +196,26 @@ export async function ensureBackend(config, deps) {
                     const pluginDir = path.join(configDir, 'plugin', 'opencode2api-empty');
                     fs.mkdirSync(pluginDir, { recursive: true });
                     fs.writeFileSync(path.join(pluginDir, 'index.js'), `export const Opencode2apiEmptyPlugin = async () => ({})\nexport default Opencode2apiEmptyPlugin\n`, 'utf8');
-                    fs.writeFileSync(
-                        path.join(configDir, 'opencode.json'),
-                        JSON.stringify({
-                            plugin: [path.join(pluginDir, 'index.js')],
-                            instructions: [],
-                            theme: 'system'
-                        }, null, 2),
-                        'utf8'
-                    );
+                    const baseConfig = {
+                        plugin: [path.join(pluginDir, 'index.js')],
+                        instructions: [],
+                        theme: 'system'
+                    };
+                    const finalConfig = injectedOpencodeConfig
+                        ? {
+                            ...injectedOpencodeConfig,
+                            ...baseConfig
+                        }
+                        : baseConfig;
+                    writeJsonFile(path.join(configDir, 'opencode.json'), finalConfig);
                     console.log('[Proxy] Using plugin-inject prompt mode');
+                    if (injectedOpencodeConfig) {
+                        console.log('[Proxy] Injected OpenCode provider config into isolated home');
+                    }
+                } else if (injectedOpencodeConfig) {
+                    const configDir = path.join(fakeHome, '.config', 'opencode');
+                    writeJsonFile(path.join(configDir, 'opencode.json'), injectedOpencodeConfig);
+                    console.log('[Proxy] Injected OpenCode provider config into isolated home');
                 }
                 console.log('[Proxy] Using isolated home for OpenCode');
             } else {
@@ -164,6 +223,11 @@ export async function ensureBackend(config, deps) {
                     ...process.env,
                     OPENCODE_PROJECT_DIR: workspace
                 };
+                if (injectedOpencodeConfig) {
+                    const configDir = path.join(envVars.HOME || os.homedir(), '.config', 'opencode');
+                    writeJsonFile(path.join(configDir, 'opencode.json'), injectedOpencodeConfig);
+                    console.log(`[Proxy] Injected OpenCode provider config at ${path.join(configDir, 'opencode.json')}`);
+                }
                 console.log('[Proxy] Using real HOME for OpenCode (isolation disabled)');
             }
         }
