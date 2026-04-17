@@ -1,7 +1,7 @@
 # opencode2api-enhanced 服务器最终运维说明
 
 更新时间：2026-04-17
-服务器：`118.190.200.12`
+服务器：`*.*.*.*`
 项目目录：`/root/opencode2api-enhanced`
 服务端口：代理 `10000`，OpenCode backend `10001`
 
@@ -214,7 +214,7 @@ kimi-for-coding
 ### Chat Completions
 
 ```bash
-curl -X POST http://118.190.200.12:10000/v1/chat/completions \
+curl -X POST http://*.*.*.*:10000/v1/chat/completions \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -232,7 +232,7 @@ curl -X POST http://118.190.200.12:10000/v1/chat/completions \
 ### Responses API
 
 ```bash
-curl -X POST http://118.190.200.12:10000/v1/responses \
+curl -X POST http://*.*.*.*:10000/v1/responses \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
