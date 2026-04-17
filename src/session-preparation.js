@@ -1,6 +1,11 @@
 import { shouldUpdateActiveModel, markActiveModel } from './active-model-cache.js';
 import { getReusableSession, rememberReusableSession } from './session-store.js';
 
+function shouldSkipActiveModelUpdate(config, providerID) {
+    const baseUrl = String(config.OPENAI_COMPAT_BASE_URL || '').toLowerCase();
+    return providerID === 'openai' && baseUrl.includes('api.kimi.com/coding/v1');
+}
+
 export async function ensureModelSession(config, deps) {
     const {
         client,
@@ -39,9 +44,12 @@ export async function ensureModelSession(config, deps) {
     });
 
     const cacheKey = config.OPENCODE_SERVER_URL;
-    const needActiveModelUpdate = shouldUpdateActiveModel(cacheKey, providerID, modelID);
+    const skipActiveModelUpdate = shouldSkipActiveModelUpdate(config, providerID);
+    const needActiveModelUpdate = !skipActiveModelUpdate && shouldUpdateActiveModel(cacheKey, providerID, modelID);
 
-    if (needActiveModelUpdate) {
+    if (skipActiveModelUpdate) {
+        logDebug('Active model update skipped by provider rule', { providerID, modelID, baseUrl: config.OPENAI_COMPAT_BASE_URL || null });
+    } else if (needActiveModelUpdate) {
         try {
             await client.config.update({
                 body: {
