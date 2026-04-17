@@ -100,6 +100,24 @@ export function createOfficialCompatRuntime(config) {
         return data;
     };
 
+    const callOfficialStream = async (path, payload, headers = buildOfficialHeaders(apiKey)) => {
+        if (!enabled) {
+            throw createProxyError('Official upstream is not configured', 500, 'official_upstream_not_configured');
+        }
+        const fetchImpl = getFetchImpl();
+        const response = await fetchImpl(`${baseUrl}${path}`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+            const data = await parseJsonSafe(response);
+            const message = data?.error?.message || data?.message || `Official upstream error (${response.status})`;
+            throw createProxyError(message, response.status, 'official_upstream_error', { data });
+        }
+        return response;
+    };
+
     return {
         enabled,
         baseUrl,
@@ -119,6 +137,43 @@ export function createOfficialCompatRuntime(config) {
             };
             const data = await callOfficial('/messages', anthropicPayload, buildAnthropicHeaders(apiKey));
             return anthropicToOpenAIChat(data, upstreamModel);
+        },
+        async anthropicMessagesStreamFromOpenAIChat(payload, handlers = {}) {
+            const upstreamModel = String(payload?.model || 'kimi-for-coding').trim() || 'kimi-for-coding';
+            const anthropicPayload = {
+                model: upstreamModel,
+                max_tokens: payload?.max_tokens || 4096,
+                messages: toAnthropicMessages(payload?.messages || []),
+                stream: true
+            };
+            const response = await callOfficialStream('/messages', anthropicPayload, buildAnthropicHeaders(apiKey));
+            const reader = response.body?.getReader?.();
+            if (!reader) throw createProxyError('Official upstream stream reader unavailable', 500, 'official_stream_unavailable');
+            const decoder = new TextDecoder();
+            let buffer = '';
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                let idx;
+                while ((idx = buffer.indexOf('\n\n')) >= 0) {
+                    const rawEvent = buffer.slice(0, idx);
+                    buffer = buffer.slice(idx + 2);
+                    const lines = rawEvent.split('\n').filter((line) => line.startsWith('data:'));
+                    for (const line of lines) {
+                        const dataText = line.slice(5).trim();
+                        if (!dataText || dataText === '[DONE]') continue;
+                        let event;
+                        try {
+                            event = JSON.parse(dataText);
+                        } catch {
+                            continue;
+                        }
+                        handlers.onEvent?.(event, upstreamModel);
+                    }
+                }
+            }
+            handlers.onDone?.(upstreamModel);
         }
     };
 }

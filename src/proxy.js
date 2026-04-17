@@ -227,12 +227,47 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                             });
                         }
                         if (stream) {
-                            return res.status(400).json({
-                                error: {
-                                    message: 'Streaming is not implemented yet for kimi-for-coding',
-                                    type: 'not_supported_error'
+                            res.setHeader('Content-Type', 'text/event-stream');
+                            res.setHeader('Cache-Control', 'no-cache');
+                            res.setHeader('Connection', 'keep-alive');
+                            const streamId = `chatcmpl-${Date.now()}`;
+                            let sentAny = false;
+                            await officialCompat.anthropicMessagesStreamFromOpenAIChat({
+                                model: upstreamModel,
+                                messages,
+                                max_tokens
+                            }, {
+                                onEvent(event, resolvedModel) {
+                                    if (event?.type === 'content_block_delta' && event?.delta?.type === 'text_delta' && event?.delta?.text) {
+                                        sentAny = true;
+                                        const chunk = {
+                                            id: streamId,
+                                            object: 'chat.completion.chunk',
+                                            created: Math.floor(Date.now() / 1000),
+                                            model: resolvedModel,
+                                            choices: [{ index: 0, delta: { content: event.delta.text }, finish_reason: null }]
+                                        };
+                                        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+                                    }
+                                },
+                                onDone(resolvedModel) {
+                                    const doneChunk = {
+                                        id: streamId,
+                                        object: 'chat.completion.chunk',
+                                        created: Math.floor(Date.now() / 1000),
+                                        model: resolvedModel,
+                                        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
+                                    };
+                                    res.write(`data: ${JSON.stringify(doneChunk)}\n\n`);
+                                    res.write('data: [DONE]\n\n');
+                                    res.end();
                                 }
                             });
+                            if (!sentAny && !res.writableEnded) {
+                                res.write('data: [DONE]\n\n');
+                                res.end();
+                            }
+                            return;
                         }
                         const officialResponse = await officialCompat.anthropicMessagesFromOpenAIChat({
                             model: upstreamModel,
