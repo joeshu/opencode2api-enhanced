@@ -37,11 +37,12 @@ import { buildChatStreamChunk, buildChatReasoningChunk, buildChatStreamUsageChun
 import { buildToolStatusEvent } from './tool-status-builders.js';
 import { cleanupSessionLater } from './session-cleanup.js';
 import { extractConversationKey } from './session-store.js';
-import { sanitizeAssistantPayload, detectCorruptedUpstreamContent, stripLeakedReasoningPreamble, splitLeakedReasoningPrefix, looksLikeLeakedReasoningPrefix } from './output-sanitizer.js';
+import { sanitizeAssistantPayload, detectCorruptedUpstreamContent, stripLeakedReasoningPreamble, splitLeakedReasoningPrefix, looksLikeLeakedReasoningPrefix, looksLikeToolPlanningLeak } from './output-sanitizer.js';
 import { buildResponsesCreatedEvent, buildResponsesMessageOutputAddedEvent, buildResponsesContentPartAddedEvent, buildResponsesReasoningOutputAddedEvent, buildResponsesReasoningDeltaEvent, buildResponsesTextDeltaEvent, buildResponsesReasoningDoneEvent, buildResponsesReasoningItemDoneEvent, buildResponsesTextDoneEvent, buildResponsesContentPartDoneEvent, buildResponsesMessageItemDoneEvent, buildResponsesCompletedEvent } from './responses-stream-builders.js';
 import { ensureModelSession, buildPromptParams } from './session-preparation.js';
 import { createLatencyTracker } from './latency-tracker.js';
 import { getLatencySummary } from './latency-summary.js';
+import { createOfficialCompatRuntime } from './official-compat.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 registerProcessCleanup();
@@ -100,6 +101,7 @@ export function createApp(config) {
 
     const clientHeaders = buildBackendAuthHeaders(OPENCODE_SERVER_PASSWORD);
     const client = createOpencodeClient({ baseUrl: OPENCODE_SERVER_URL, headers: clientHeaders });
+    const officialCompat = createOfficialCompatRuntime(config);
     const modelsRuntime = createModelsRuntime(client, config.MODEL_CACHE_MS);
     const getModelsList = modelsRuntime.getModelsList;
     const resolveRequestedModel = modelsRuntime.resolveRequestedModel;
@@ -137,6 +139,26 @@ export function createApp(config) {
     app.get('/v1/models', async (req, res) => {
         const { requestId, log } = createRequestLogger(req, res);
         try {
+            if (officialCompat.enabled && officialCompat.baseUrl.includes('api.kimi.com/coding/v1')) {
+                const officialModels = await officialCompat.listModels();
+                const data = Array.isArray(officialModels?.data) ? officialModels.data.map((m) => ({
+                    id: m.id,
+                    name: m.display_name || m.id,
+                    object: 'model',
+                    created: m.created || 1704067200,
+                    owned_by: 'openai',
+                    capabilities: {
+                        supports_streaming: true,
+                        supports_reasoning: Boolean(m.supports_reasoning),
+                        supports_tools: false,
+                        supports_images: Boolean(m.supports_image_in)
+                    },
+                    aliases: [m.id],
+                    provider: 'openai'
+                })) : [];
+                log('Models fetched from official upstream', { count: data.length, baseUrl: officialCompat.baseUrl });
+                return res.json({ object: 'list', data });
+            }
             const models = await getModelsList();
             log('Models fetched', { count: models.length });
             res.json({ object: 'list', data: models });
@@ -192,6 +214,23 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     stream = Boolean(requestStream);
                     if (!messages || !Array.isArray(messages) || messages.length === 0) {
                         return res.status(400).json({ error: { message: 'messages array is required' } });
+                    }
+
+                    if (officialCompat.enabled && officialCompat.baseUrl.includes('api.kimi.com/coding/v1') && !stream) {
+                        const upstreamModel = String(model || config.OPENAI_COMPAT_MODEL || 'kimi-for-coding').trim() || 'kimi-for-coding';
+                        const officialResponse = await officialCompat.chatCompletions({
+                            model: upstreamModel,
+                            messages,
+                            temperature,
+                            max_tokens,
+                            top_p,
+                            frequency_penalty,
+                            presence_penalty,
+                            stop,
+                            stream: false
+                        });
+                        log('Chat completed via official upstream', { model: upstreamModel, baseUrl: officialCompat.baseUrl });
+                        return res.json(officialResponse);
                     }
 
                     const reasoningLevel = normalizeReasoningEffort(
@@ -983,6 +1022,11 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                                 itemId: outputItemId,
                                 delta: split.contentRemainder
                             }));
+                            return;
+                        }
+                        if (!reasoning && looksLikeToolPlanningLeak(combinedCandidate)) {
+                            pendingReasoningLikeContent = combinedCandidate;
+                            logDebug('Buffered tool-planning leak candidate', { sessionId, preview: combinedCandidate.slice(0, 160) });
                             return;
                         }
                         if (!reasoning && looksLikeLeakedReasoningPrefix(combinedCandidate)) {
