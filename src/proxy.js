@@ -139,6 +139,26 @@ export function createApp(config) {
     app.get('/v1/models', async (req, res) => {
         const { requestId, log } = createRequestLogger(req, res);
         try {
+            if (officialCompat.enabled && officialCompat.baseUrl.includes('api.kimi.com/coding/v1')) {
+                const officialModels = await officialCompat.listModels();
+                const data = Array.isArray(officialModels?.data) ? officialModels.data.map((m) => ({
+                    id: m.id,
+                    name: m.display_name || m.id,
+                    object: 'model',
+                    created: m.created || 1704067200,
+                    owned_by: 'official-kimi-code',
+                    capabilities: {
+                        supports_streaming: false,
+                        supports_reasoning: Boolean(m.supports_reasoning),
+                        supports_tools: false,
+                        supports_images: Boolean(m.supports_image_in)
+                    },
+                    aliases: [m.id],
+                    provider: 'official-kimi-code'
+                })) : [];
+                log('Models fetched from official upstream', { count: data.length, baseUrl: officialCompat.baseUrl });
+                return res.json({ object: 'list', data });
+            }
             const models = await getModelsList();
             log('Models fetched', { count: models.length });
             res.json({ object: 'list', data: models });
@@ -196,8 +216,24 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         return res.status(400).json({ error: { message: 'messages array is required' } });
                     }
 
-                    if (officialCompat.enabled && officialCompat.baseUrl.includes('api.kimi.com/coding/v1') && !stream) {
-                        const upstreamModel = String(model || config.OPENAI_COMPAT_MODEL || 'kimi-for-coding').trim() || 'kimi-for-coding';
+                    const upstreamModel = String(model || config.OPENAI_COMPAT_MODEL || 'kimi-for-coding').trim() || 'kimi-for-coding';
+                    if (officialCompat.enabled && officialCompat.baseUrl.includes('api.kimi.com/coding/v1')) {
+                        if (upstreamModel !== 'kimi-for-coding') {
+                            return res.status(400).json({
+                                error: {
+                                    message: `Unsupported model for official Kimi Code route: ${upstreamModel}`,
+                                    type: 'model_not_found'
+                                }
+                            });
+                        }
+                        if (stream) {
+                            return res.status(400).json({
+                                error: {
+                                    message: 'Streaming is not implemented yet for kimi-for-coding',
+                                    type: 'not_supported_error'
+                                }
+                            });
+                        }
                         const officialResponse = await officialCompat.anthropicMessagesFromOpenAIChat({
                             model: upstreamModel,
                             messages,
