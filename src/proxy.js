@@ -196,6 +196,17 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                         return res.status(400).json({ error: { message: 'messages array is required' } });
                     }
 
+                    if (officialCompat.enabled && officialCompat.baseUrl.includes('api.kimi.com/coding/v1') && !stream) {
+                        const upstreamModel = String(model || config.OPENAI_COMPAT_MODEL || 'kimi-for-coding').trim() || 'kimi-for-coding';
+                        const officialResponse = await officialCompat.anthropicMessagesFromOpenAIChat({
+                            model: upstreamModel,
+                            messages,
+                            max_tokens
+                        });
+                        log('Chat completed via official anthropic upstream', { model: upstreamModel, baseUrl: officialCompat.baseUrl });
+                        return res.json(officialResponse);
+                    }
+
                     const reasoningLevel = normalizeReasoningEffort(
                         reasoning_effort || reasoning?.effort,
                         null
