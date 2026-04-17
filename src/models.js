@@ -14,7 +14,76 @@ function buildModelAliases(fullId) {
     const aliases = [id, modelId];
     const normalized = modelId.replace(/^gpt(\d)/i, 'gpt-$1');
     if (!aliases.includes(normalized)) aliases.push(normalized);
+
+    const lowerModelId = modelId.toLowerCase();
+    const codingAliases = [
+        'kimi-for-coding',
+        'kimi coding',
+        'kimi-coding',
+        'kimi_code',
+        'kimi-code'
+    ];
+
+    if (lowerModelId.startsWith('kimi')) {
+        codingAliases.forEach((alias) => {
+            if (!aliases.includes(alias)) aliases.push(alias);
+        });
+    }
+
     return aliases;
+}
+
+function normalizeModelID(modelID) {
+    if (!modelID || typeof modelID !== 'string') return modelID;
+    const trimmed = modelID.trim();
+    const lower = trimmed.toLowerCase();
+    const aliasMap = {
+        'gpt5-nano': 'gpt-5-nano',
+        'kimi for coding': 'kimi-for-coding',
+        'kimi-coding': 'kimi-for-coding',
+        'kimi_code': 'kimi-for-coding',
+        'kimi-code': 'kimi-for-coding'
+    };
+    return aliasMap[lower] || trimmed.replace(/^gpt(\d)/i, 'gpt-$1').replace(/^o(\d)/i, 'o$1');
+}
+
+function scoreKimiCodingCandidate(model) {
+    const id = String(model?.id || '').toLowerCase();
+    const [, modelId = id] = id.split('/');
+    let score = 0;
+    if (model?.owned_by === 'opencode') score += 50;
+    if (modelId.startsWith('kimi')) score += 100;
+    if (modelId.includes('coding') || modelId.includes('code')) score += 80;
+    if (modelId.includes('k2.6')) score += 30;
+    if (modelId.includes('k2.5')) score += 25;
+    if (modelId.includes('k2')) score += 20;
+    if (modelId.includes('free')) score += 5;
+    return score;
+}
+
+function resolveSpecialModelAlias(models, providerID, modelID, originalModelID) {
+    const normalized = String(modelID || '').toLowerCase();
+    if (normalized !== 'kimi-for-coding') return null;
+
+    const sameProvider = models.filter((m) => m.owned_by === providerID);
+    const pool = sameProvider.length > 0 ? sameProvider : models;
+    const kimiCandidates = pool.filter((m) => String(m.id || '').toLowerCase().includes('/kimi'));
+    const ranked = kimiCandidates.sort((a, b) => scoreKimiCodingCandidate(b) - scoreKimiCodingCandidate(a));
+    const target = ranked[0];
+    if (!target) return null;
+
+    const [resolvedProviderID, resolvedModelID] = String(target.id).split('/');
+    return {
+        providerID: resolvedProviderID,
+        modelID: resolvedModelID,
+        models,
+        resolved: target.id,
+        aliasFrom: `${providerID}/${originalModelID}`
+    };
+}
+
+function exactIdParts(fullId) {
+    return String(fullId || '').split('/');
 }
 
 export function createModelsRuntime(client, modelCacheMs) {
@@ -75,17 +144,11 @@ export function createModelsRuntime(client, modelCacheMs) {
         return models;
     };
 
-    const normalizeModelID = (modelID) => {
-        if (!modelID || typeof modelID !== 'string') return modelID;
-        return modelID
-            .replace(/^gpt(\d)/i, 'gpt-$1')
-            .replace(/^o(\d)/i, 'o$1');
-    };
-
     const resolveRequestedModel = async (requestedModel) => {
         const models = await getModelsList();
         const fallbackModel = models[0]?.id || 'opencode/kimi-k2.5-free';
         let [providerID, modelID] = (requestedModel || fallbackModel).split('/');
+        const hadExplicitProvider = Boolean(modelID);
         if (!modelID) {
             modelID = providerID;
             providerID = 'opencode';
@@ -93,9 +156,27 @@ export function createModelsRuntime(client, modelCacheMs) {
         const originalModelID = modelID;
         const normalizedModelID = normalizeModelID(modelID);
         const candidateModelIDs = [...new Set([modelID, normalizedModelID].filter(Boolean))];
+
+        if (!hadExplicitProvider) {
+            const aliasMatch = models.find((m) => {
+                const aliases = Array.isArray(m.aliases) ? m.aliases.map((a) => String(a).toLowerCase()) : [];
+                return candidateModelIDs.some((candidate) => aliases.includes(String(candidate).toLowerCase()));
+            });
+            if (aliasMatch) {
+                const [resolvedProviderID, resolvedModelID] = exactIdParts(aliasMatch.id);
+                return {
+                    providerID: resolvedProviderID,
+                    modelID: resolvedModelID,
+                    models,
+                    resolved: aliasMatch.id,
+                    aliasFrom: originalModelID
+                };
+            }
+        }
+
         const exact = models.find((m) => candidateModelIDs.some((candidate) => m.id === `${providerID}/${candidate}`));
         if (exact) {
-            const [, resolvedModelID] = exact.id.split('/');
+            const [, resolvedModelID] = exactIdParts(exact.id);
             return {
                 providerID,
                 modelID: resolvedModelID,
@@ -104,10 +185,14 @@ export function createModelsRuntime(client, modelCacheMs) {
                 ...(resolvedModelID !== originalModelID && { aliasFrom: `${providerID}/${originalModelID}` })
             };
         }
+        const specialAliasMatch = resolveSpecialModelAlias(models, providerID, normalizedModelID, originalModelID);
+        if (specialAliasMatch) {
+            return specialAliasMatch;
+        }
         const sameProvider = models.filter((m) => m.owned_by === providerID);
         const suffixMatch = sameProvider.find((m) => candidateModelIDs.some((candidate) => m.id.endsWith(`/${candidate}-free`) || m.id.endsWith(`/${candidate}`)));
         if (suffixMatch) {
-            const [, resolvedModelID] = suffixMatch.id.split('/');
+            const [, resolvedModelID] = exactIdParts(suffixMatch.id);
             return { providerID, modelID: resolvedModelID, models, resolved: suffixMatch.id, aliasFrom: `${providerID}/${originalModelID}` };
         }
         const error = new Error(`Model not found: ${providerID}/${modelID}`);
