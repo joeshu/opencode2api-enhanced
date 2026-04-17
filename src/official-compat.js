@@ -10,7 +10,9 @@ function getFetchImpl() {
 function buildOfficialHeaders(apiKey) {
     return {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`
+        Authorization: `Bearer ${apiKey}`,
+        'User-Agent': 'Claude-Code/1.0',
+        'X-Client-Name': 'Claude-Code'
     };
 }
 
