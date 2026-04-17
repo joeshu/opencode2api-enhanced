@@ -139,26 +139,6 @@ export function createApp(config) {
     app.get('/v1/models', async (req, res) => {
         const { requestId, log } = createRequestLogger(req, res);
         try {
-            if (officialCompat.enabled && officialCompat.baseUrl.includes('api.kimi.com/coding/v1')) {
-                const officialModels = await officialCompat.listModels();
-                const data = Array.isArray(officialModels?.data) ? officialModels.data.map((m) => ({
-                    id: m.id,
-                    name: m.display_name || m.id,
-                    object: 'model',
-                    created: m.created || 1704067200,
-                    owned_by: 'openai',
-                    capabilities: {
-                        supports_streaming: true,
-                        supports_reasoning: Boolean(m.supports_reasoning),
-                        supports_tools: false,
-                        supports_images: Boolean(m.supports_image_in)
-                    },
-                    aliases: [m.id],
-                    provider: 'openai'
-                })) : [];
-                log('Models fetched from official upstream', { count: data.length, baseUrl: officialCompat.baseUrl });
-                return res.json({ object: 'list', data });
-            }
             const models = await getModelsList();
             log('Models fetched', { count: models.length });
             res.json({ object: 'list', data: models });
@@ -214,23 +194,6 @@ async function handleChatCompletions(req, res, config, client, REQUEST_TIMEOUT_M
                     stream = Boolean(requestStream);
                     if (!messages || !Array.isArray(messages) || messages.length === 0) {
                         return res.status(400).json({ error: { message: 'messages array is required' } });
-                    }
-
-                    if (officialCompat.enabled && officialCompat.baseUrl.includes('api.kimi.com/coding/v1') && !stream) {
-                        const upstreamModel = String(model || config.OPENAI_COMPAT_MODEL || 'kimi-for-coding').trim() || 'kimi-for-coding';
-                        const officialResponse = await officialCompat.chatCompletions({
-                            model: upstreamModel,
-                            messages,
-                            temperature,
-                            max_tokens,
-                            top_p,
-                            frequency_penalty,
-                            presence_penalty,
-                            stop,
-                            stream: false
-                        });
-                        log('Chat completed via official upstream', { model: upstreamModel, baseUrl: officialCompat.baseUrl });
-                        return res.json(officialResponse);
                     }
 
                     const reasoningLevel = normalizeReasoningEffort(
